@@ -21,6 +21,7 @@ PYBIND11_MODULE(_axe, m) {
         .def_property_readonly("shape", &Tensor::shape)
         .def_property_readonly("dtype", &Tensor::dtype)
         .def_property_readonly("device", &Tensor::device)
+        .def_property_readonly("data", [](Tensor &t) { return reinterpret_cast<uintptr_t>(t.data()); })
         .def("__array__", [](const Tensor& t) {
             py::dtype dt;
             if (t.dtype() == DType::Float32) dt = py::dtype::of<float>();
@@ -41,5 +42,9 @@ PYBIND11_MODULE(_axe, m) {
         })
         .def_static("zeros", &Tensor::zeros)
         .def_static("ones", &Tensor::ones)
-        .def_static("arange", &Tensor::arange);
+        .def_static("arange", &Tensor::arange)
+        .def("__add__", &Tensor::add)
+        .def("__sub__", &Tensor::sub)
+        .def("__mul__", &Tensor::mul)
+        .def("__truediv__", &Tensor::div);
 }

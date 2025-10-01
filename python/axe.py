@@ -16,7 +16,7 @@ def array(obj, dtype='float32', device='cpu'):
     # Copy data from numpy to tensor
     arr_bytes = np_arr.tobytes()
     import ctypes
-    ctypes.memmove(int(t.data), arr_bytes, len(arr_bytes))
+    ctypes.memmove(t.data, arr_bytes, len(arr_bytes))
     return t
 
 def zeros(shape, dtype='float32', device='cpu'):

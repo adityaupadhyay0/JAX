@@ -30,6 +30,11 @@ public:
     static Tensor ones(const std::vector<size_t>& shape, DType dtype, Device device = Device::CPU);
     static Tensor arange(size_t start, size_t end, DType dtype, Device device = Device::CPU);
 
+    Tensor add(const Tensor& other) const;
+    Tensor sub(const Tensor& other) const;
+    Tensor mul(const Tensor& other) const;
+    Tensor div(const Tensor& other) const;
+
 private:
     std::vector<size_t> shape_;
     DType dtype_;
