@@ -53,7 +53,34 @@ PYBIND11_MODULE(_axe, m) {
         .def("__add__", &Tensor::add)
         .def("__sub__", &Tensor::sub)
         .def("__mul__", &Tensor::mul)
-        .def("__truediv__", &Tensor::div);
+        .def("__truediv__", &Tensor::div)
+        .def("__matmul__", &Tensor::matmul)
+        .def("sum", &Tensor::sum)
+        .def("mean", &Tensor::mean)
+        .def("max", &Tensor::max)
+        .def("numpy", [](Tensor& t) -> py::array {
+            const auto& shape_size_t = t.shape();
+            std::vector<py::ssize_t> shape(shape_size_t.begin(), shape_size_t.end());
+            py::ssize_t itemsize = dtype_size(t.dtype());
+
+            std::vector<py::ssize_t> strides(shape.size());
+            if (!shape.empty()) {
+                strides.back() = itemsize;
+                for (int i = shape.size() - 2; i >= 0; --i) {
+                    strides[i] = strides[i+1] * shape[i+1];
+                }
+            }
+
+            // Create a py::array from the buffer_info. This copies the data.
+            return py::array(py::buffer_info(
+                t.data(),
+                itemsize,
+                format_descriptor(t.dtype()),
+                shape.size(),
+                shape,
+                strides
+            ));
+        });
 }
 
 // Helper to get pybind11 format descriptor string for a DType

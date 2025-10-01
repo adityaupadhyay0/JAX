@@ -35,6 +35,11 @@ public:
     Tensor sub(const Tensor& other) const;
     Tensor mul(const Tensor& other) const;
     Tensor div(const Tensor& other) const;
+    Tensor matmul(const Tensor& other) const;
+
+    Tensor sum() const;
+    Tensor mean() const;
+    Tensor max() const;
 
 private:
     std::vector<size_t> shape_;

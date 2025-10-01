@@ -37,3 +37,13 @@ def test_array_roundtrip():
     t = array(arr)
     arr2 = np.array(t)
     assert np.allclose(arr, arr2)
+
+def test_numpy_method():
+    shape = (2, 3)
+    np_arr = np.random.randn(*shape).astype(np.float32)
+    t = array(np_arr)
+    np_arr_back = t.numpy()
+    assert isinstance(np_arr_back, np.ndarray)
+    assert np_arr_back.shape == shape
+    assert str(np_arr_back.dtype) == 'float32'
+    assert np.allclose(np_arr, np_arr_back)
