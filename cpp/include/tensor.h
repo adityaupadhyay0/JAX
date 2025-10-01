@@ -25,6 +25,7 @@ public:
     const void* data() const { return data_; }
 
     size_t nbytes() const;
+    size_t nelement() const;
 
     static Tensor zeros(const std::vector<size_t>& shape, DType dtype, Device device = Device::CPU);
     static Tensor ones(const std::vector<size_t>& shape, DType dtype, Device device = Device::CPU);
