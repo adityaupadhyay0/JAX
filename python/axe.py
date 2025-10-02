@@ -1,8 +1,62 @@
 import numpy as np
 import contextlib
+import functools
 from ._axe import Tensor, Device, DType, Variable
 from ._axe import _value_and_grad_cpp_multi
 from ._axe import set_grad_enabled, is_grad_enabled
+from ._axe import jit as _jit
+
+# --- JIT Compilation ---
+
+def _get_arg_signature(arg):
+    """Generates a unique signature for an argument based on its shape and dtype."""
+    if isinstance(arg, (Tensor, Variable)):
+        return (tuple(arg.data.shape), str(arg.data.dtype))
+    return type(arg)
+
+def jit(fn):
+    """
+    Decorator to just-in-time compile a function for acceleration.
+    """
+    cache = {}
+
+    @functools.wraps(fn)
+    def jit_wrapper(*args):
+        # Create a signature from the shapes of the tensor arguments
+        signature = tuple(_get_arg_signature(arg) for arg in args)
+
+        if signature in cache:
+            # Execute the cached graph using the C++ backend
+            graph = cache[signature]
+            # We pass the raw tensor data for execution
+            input_tensors = [arg.data if isinstance(arg, Variable) else arg for arg in args]
+            result_tensor = graph.execute(input_tensors)
+            # The result of a JIT execution should not be a Variable for now
+            return result_tensor
+        else:
+            # Trace the function to get the graph
+            _jit.start_tracing()
+            try:
+                # Ensure inputs are Variables and register them as placeholders
+                traced_args = []
+                for arg in args:
+                    var = arg if isinstance(arg, Variable) else array(arg, requires_grad=True)
+                    _jit.register_input(var)
+                    traced_args.append(var)
+
+                result = fn(*traced_args)
+                graph = _jit.stop_tracing()
+            except Exception:
+                # Ensure we always stop tracing, even on error
+                _jit.stop_tracing()
+                raise
+
+            if graph:
+                cache[signature] = graph
+            return result
+
+    return jit_wrapper
+
 
 # --- Gradient Tracking ---
 
