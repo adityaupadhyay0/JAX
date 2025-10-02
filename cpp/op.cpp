@@ -1,5 +1,6 @@
 #include "include/op.h"
 #include "include/autodiff.h"
+#include "include/jit.h"
 #include <algorithm> // For std::fill
 
 namespace axe {
@@ -119,6 +120,20 @@ void MatMulOp::backward(const Tensor& grad_output) {
 
 
 // --- Operator Functions ---
+
+// Helper to get or create a JIT node for a variable
+static jit::Node get_or_create_jit_node(std::shared_ptr<Variable>& var) {
+    // If a variable doesn't have a node ID at this point, it's a constant
+    // created inside the function, not a placeholder input.
+    if (!var->jit_node_id.has_value()) {
+        jit::Node new_node = jit::active_graph->add_constant(var->data);
+        var->jit_node_id = new_node.id;
+        return new_node;
+    }
+    // It's a known variable (either a registered input or the output of a previous op).
+    return {var->jit_node_id.value(), var};
+}
+
 std::shared_ptr<Variable> add(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b) {
     Tensor result_data = a->data.add(b->data);
     bool requires_grad = (a->requires_grad || b->requires_grad) && grad_enabled;
@@ -127,6 +142,15 @@ std::shared_ptr<Variable> add(std::shared_ptr<Variable> a, std::shared_ptr<Varia
     if (requires_grad) {
         result->creator = std::make_shared<AddOp>(a, b);
     }
+
+    if (jit::is_tracing) {
+        jit::Node node_a = get_or_create_jit_node(a);
+        jit::Node node_b = get_or_create_jit_node(b);
+        jit::Node output_node = {jit::active_graph->get_next_node_id()};
+        result->jit_node_id = output_node.id;
+        jit::active_graph->add_op({jit::OpType::Add, {node_a, node_b}, output_node});
+    }
+
     return result;
 }
 
@@ -138,6 +162,15 @@ std::shared_ptr<Variable> mul(std::shared_ptr<Variable> a, std::shared_ptr<Varia
     if (requires_grad) {
         result->creator = std::make_shared<MulOp>(a, b);
     }
+
+    if (jit::is_tracing) {
+        jit::Node node_a = get_or_create_jit_node(a);
+        jit::Node node_b = get_or_create_jit_node(b);
+        jit::Node output_node = {jit::active_graph->get_next_node_id()};
+        result->jit_node_id = output_node.id;
+        jit::active_graph->add_op({jit::OpType::Mul, {node_a, node_b}, output_node});
+    }
+
     return result;
 }
 
@@ -149,6 +182,15 @@ std::shared_ptr<Variable> matmul(std::shared_ptr<Variable> a, std::shared_ptr<Va
     if (requires_grad) {
         result->creator = std::make_shared<MatMulOp>(a, b);
     }
+
+    if (jit::is_tracing) {
+        jit::Node node_a = get_or_create_jit_node(a);
+        jit::Node node_b = get_or_create_jit_node(b);
+        jit::Node output_node = {jit::active_graph->get_next_node_id()};
+        result->jit_node_id = output_node.id;
+        jit::active_graph->add_op({jit::OpType::MatMul, {node_a, node_b}, output_node});
+    }
+
     return result;
 }
 
@@ -160,6 +202,14 @@ std::shared_ptr<Variable> sum(std::shared_ptr<Variable> a) {
     if (requires_grad) {
         result->creator = std::make_shared<SumOp>(a);
     }
+
+    if (jit::is_tracing) {
+        jit::Node node_a = get_or_create_jit_node(a);
+        jit::Node output_node = {jit::active_graph->get_next_node_id()};
+        result->jit_node_id = output_node.id;
+        jit::active_graph->add_op({jit::OpType::Sum, {node_a}, output_node});
+    }
+
     return result;
 }
 
@@ -171,6 +221,15 @@ std::shared_ptr<Variable> sub(std::shared_ptr<Variable> a, std::shared_ptr<Varia
     if (requires_grad) {
         result->creator = std::make_shared<SubOp>(a, b);
     }
+
+    if (jit::is_tracing) {
+        jit::Node node_a = get_or_create_jit_node(a);
+        jit::Node node_b = get_or_create_jit_node(b);
+        jit::Node output_node = {jit::active_graph->get_next_node_id()};
+        result->jit_node_id = output_node.id;
+        jit::active_graph->add_op({jit::OpType::Sub, {node_a, node_b}, output_node});
+    }
+
     return result;
 }
 

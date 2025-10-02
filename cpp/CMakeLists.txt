@@ -15,7 +15,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(Eigen3)
 
-add_library(axe_core STATIC tensor.cpp variable.cpp op.cpp autodiff.cpp)
+add_library(axe_core STATIC tensor.cpp variable.cpp op.cpp autodiff.cpp jit.cpp)
 target_include_directories(axe_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(axe_core PUBLIC Eigen3::Eigen)
 

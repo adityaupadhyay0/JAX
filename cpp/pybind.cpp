@@ -6,6 +6,7 @@
 #include "include/variable.h"
 #include "include/op.h"
 #include "include/autodiff.h"
+#include "include/jit.h"
 
 namespace py = pybind11;
 using namespace axe;
@@ -237,6 +238,41 @@ PYBIND11_MODULE(_axe, m) {
 
     m.def("is_grad_enabled", []() { return axe::grad_enabled; });
     m.def("set_grad_enabled", [](bool enabled) { axe::grad_enabled = enabled; });
+
+    // --- JIT Bindings ---
+    auto jit_module = m.def_submodule("jit", "JIT compiler functionality");
+
+    py::enum_<jit::OpType>(jit_module, "OpType")
+        .value("Add", jit::OpType::Add)
+        .value("Sub", jit::OpType::Sub)
+        .value("Mul", jit::OpType::Mul)
+        .value("Div", jit::OpType::Div)
+        .value("MatMul", jit::OpType::MatMul)
+        .value("Sum", jit::OpType::Sum);
+
+    py::class_<jit::Node>(jit_module, "Node")
+        .def_readonly("id", &jit::Node::id);
+
+    py::class_<jit::TraceableOp>(jit_module, "TraceableOp")
+        .def_readonly("type", &jit::TraceableOp::type)
+        .def_readonly("inputs", &jit::TraceableOp::inputs)
+        .def_readonly("output", &jit::TraceableOp::output);
+
+    py::class_<jit::JitGraph, std::shared_ptr<jit::JitGraph>>(jit_module, "JitGraph")
+        .def("get_inputs", &jit::JitGraph::get_inputs, py::return_value_policy::reference)
+        .def("get_ops", &jit::JitGraph::get_ops, py::return_value_policy::reference)
+        .def("get_output_node", &jit::JitGraph::get_output_node, py::return_value_policy::reference)
+        .def("execute", &jit::JitGraph::execute, "Executes the compiled graph with given inputs.")
+        .def("__repr__", [](const jit::JitGraph &g) {
+            std::stringstream ss;
+            ss << "<JitGraph with " << g.get_inputs().size() << " inputs, "
+               << g.get_ops().size() << " ops>";
+            return ss.str();
+        });
+
+    jit_module.def("start_tracing", &jit::start_tracing, "Starts JIT tracing.");
+    jit_module.def("stop_tracing", &jit::stop_tracing, "Stops JIT tracing and returns the graph.");
+    jit_module.def("register_input", &jit::register_input, "Registers a variable as a placeholder input for the trace.");
 }
 
 // Helper to get pybind11 format descriptor string for a DType
