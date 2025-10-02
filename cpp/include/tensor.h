@@ -40,6 +40,7 @@ public:
     Tensor sum() const;
     Tensor mean() const;
     Tensor max() const;
+    Tensor transpose() const;
 
 private:
     std::vector<size_t> shape_;

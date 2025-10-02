@@ -52,3 +52,25 @@ This document contains the audit of the AXE project, focusing on the completion 
 - **All ops work on GPU**: ❌ (No GPU support)
 - **Broadcasting works correctly**: ❌ (No broadcasting logic implemented)
 - **Benchmark vs NumPy**: ❌ (No benchmark tests found in the repository)
+
+---
+
+## PHASE 3: Autodiff Basics
+
+### C++ Autodiff
+- **Create `Variable` class with grad**: ✅ (Implemented in `cpp/include/variable.h` and `cpp/variable.cpp`)
+- **Build computation graph (tape)**: ✅ (A robust computation graph was implemented. `Variable` objects store a `creator` pointer to the `Operation` that produced them)
+- **Implement `backward()` method**: ✅ (Implemented in `cpp/variable.cpp` with a topological sort of the computation graph)
+- **Add gradients for: add, mul, matmul**: ✅ (Implemented in `cpp/op.cpp` with backward passes for `AddOp`, `MulOp`, and `MatMulOp`)
+- **Handle in-place operations**: ❌ (Not implemented, as this is an advanced feature)
+
+### Python API
+- **`axe.grad(fn)` function**: ✅ (Implemented in `python/axe.py` and supports multiple arguments)
+- **`axe.value_and_grad(fn)`**: ✅ (Implemented in `python/axe.py` and supports multiple arguments)
+- **Enable/disable grad mode**: ✅ (A `no_grad` context manager is implemented in `python/axe.py` and connected to a C++ global flag)
+
+### Test
+- **Gradient of x^2 is 2x**: ✅ (Verified in `tests/test_autodiff.py` with the `test_grad_simple` test)
+- **Gradients match finite differences**: ❌ (Not explicitly tested, but gradient correctness is verified by other tests)
+- **Chain rule works**: ✅ (Verified in `tests/test_autodiff.py` with the `test_grad_chain_rule` test)
+- **MILESTONE: Can train simple linear regression**: ✅ (Verified with the `test_linear_regression` test in `tests/test_autodiff.py`)

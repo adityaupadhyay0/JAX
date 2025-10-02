@@ -1,14 +1,17 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
-#include "tensor.h"
+#include <pybind11/functional.h>
+#include "include/tensor.h"
+#include "include/variable.h"
+#include "include/op.h"
+#include "include/autodiff.h"
 
 namespace py = pybind11;
 using namespace axe;
 
 size_t dtype_size(DType dtype); // Forward declaration
 std::string format_descriptor(DType dtype); // Forward declaration
-
 PYBIND11_MODULE(_axe, m) {
     py::enum_<Device>(m, "Device")
         .value("CPU", Device::CPU)
@@ -50,11 +53,47 @@ PYBIND11_MODULE(_axe, m) {
         .def_static("zeros", &Tensor::zeros)
         .def_static("ones", &Tensor::ones)
         .def_static("arange", &Tensor::arange, py::arg("start"), py::arg("end"), py::arg("dtype"), py::arg("device") = Device::CPU)
-        .def("__add__", &Tensor::add)
-        .def("__sub__", &Tensor::sub)
-        .def("__mul__", &Tensor::mul)
+        .def("__add__", [](const Tensor& a, py::object b_obj) {
+            if (py::isinstance<Tensor>(b_obj)) {
+                return py::cast(a.add(b_obj.cast<Tensor>()));
+            } else if (py::isinstance<Variable>(b_obj)) {
+                auto a_var = std::make_shared<Variable>(a, false);
+                auto b_var = b_obj.cast<std::shared_ptr<Variable>>();
+                return py::cast(add(a_var, b_var));
+            }
+            throw py::type_error("Unsupported type for __add__");
+        })
+        .def("__sub__", [](const Tensor& a, py::object b_obj) {
+            if (py::isinstance<Tensor>(b_obj)) {
+                return py::cast(a.sub(b_obj.cast<Tensor>()));
+            } else if (py::isinstance<Variable>(b_obj)) {
+                auto a_var = std::make_shared<Variable>(a, false);
+                auto b_var = b_obj.cast<std::shared_ptr<Variable>>();
+                return py::cast(sub(a_var, b_var));
+            }
+            throw py::type_error("Unsupported type for __sub__");
+        })
+        .def("__mul__", [](const Tensor& a, py::object b_obj) {
+            if (py::isinstance<Tensor>(b_obj)) {
+                return py::cast(a.mul(b_obj.cast<Tensor>()));
+            } else if (py::isinstance<Variable>(b_obj)) {
+                auto a_var = std::make_shared<Variable>(a, false);
+                auto b_var = b_obj.cast<std::shared_ptr<Variable>>();
+                return py::cast(mul(a_var, b_var));
+            }
+            throw py::type_error("Unsupported type for __mul__");
+        })
         .def("__truediv__", &Tensor::div)
-        .def("__matmul__", &Tensor::matmul)
+        .def("__matmul__", [](const Tensor& a, py::object b_obj) {
+            if (py::isinstance<Tensor>(b_obj)) {
+                return py::cast(a.matmul(b_obj.cast<Tensor>()));
+            } else if (py::isinstance<Variable>(b_obj)) {
+                auto a_var = std::make_shared<Variable>(a, false);
+                auto b_var = b_obj.cast<std::shared_ptr<Variable>>();
+                return py::cast(matmul(a_var, b_var));
+            }
+            throw py::type_error("Unsupported type for __matmul__");
+        })
         .def("sum", &Tensor::sum)
         .def("mean", &Tensor::mean)
         .def("max", &Tensor::max)
@@ -71,7 +110,6 @@ PYBIND11_MODULE(_axe, m) {
                 }
             }
 
-            // Create a py::array from the buffer_info. This copies the data.
             return py::array(py::buffer_info(
                 t.data(),
                 itemsize,
@@ -81,6 +119,124 @@ PYBIND11_MODULE(_axe, m) {
                 strides
             ));
         });
+
+    py::class_<Variable, std::shared_ptr<Variable>>(m, "Variable")
+        .def(py::init<const Tensor&, bool>(), py::arg("data"), py::arg("requires_grad") = false)
+        .def_readwrite("data", &Variable::data)
+        .def_readwrite("requires_grad", &Variable::requires_grad)
+        .def_property("grad",
+            [](Variable &v) -> py::object {
+                if (v.grad) {
+                    return py::cast(*v.grad);
+                }
+                return py::none();
+            },
+            [](Variable &v, const Tensor &t) {
+                v.grad = std::make_shared<Tensor>(t);
+            })
+        .def("backward", &Variable::backward)
+        .def("__add__", [](std::shared_ptr<Variable> a, std::shared_ptr<Variable> b) -> py::object {
+            if (!axe::grad_enabled) {
+                return py::cast(a->data.add(b->data));
+            }
+            return py::cast(add(a, b));
+        })
+        .def("__mul__", [](std::shared_ptr<Variable> a, std::shared_ptr<Variable> b) -> py::object {
+            if (!axe::grad_enabled) {
+                return py::cast(a->data.mul(b->data));
+            }
+            return py::cast(mul(a, b));
+        })
+        .def("__matmul__", [](std::shared_ptr<Variable> a, std::shared_ptr<Variable> b) -> py::object {
+            if (!axe::grad_enabled) { return py::cast(a->data.matmul(b->data)); }
+            return py::cast(matmul(a, b));
+        })
+        .def("__sub__", [](std::shared_ptr<Variable> a, std::shared_ptr<Variable> b) -> py::object {
+            if (!axe::grad_enabled) { return py::cast(a->data.sub(b->data)); }
+            return py::cast(sub(a, b));
+        })
+        // Mixed-type operations: Variable op Tensor
+        .def("__add__", [](std::shared_ptr<Variable> a, const Tensor& b) -> py::object {
+            auto b_var = std::make_shared<Variable>(b, false);
+            if (!axe::grad_enabled || !a->requires_grad) { return py::cast(a->data.add(b)); }
+            return py::cast(add(a, b_var));
+        })
+        .def("__sub__", [](std::shared_ptr<Variable> a, const Tensor& b) -> py::object {
+            auto b_var = std::make_shared<Variable>(b, false);
+            if (!axe::grad_enabled || !a->requires_grad) { return py::cast(a->data.sub(b)); }
+            return py::cast(sub(a, b_var));
+        })
+        .def("__mul__", [](std::shared_ptr<Variable> a, const Tensor& b) -> py::object {
+            auto b_var = std::make_shared<Variable>(b, false);
+            if (!axe::grad_enabled || !a->requires_grad) { return py::cast(a->data.mul(b)); }
+            return py::cast(mul(a, b_var));
+        })
+        .def("__matmul__", [](std::shared_ptr<Variable> a, const Tensor& b) -> py::object {
+            auto b_var = std::make_shared<Variable>(b, false);
+            if (!axe::grad_enabled || !a->requires_grad) { return py::cast(a->data.matmul(b)); }
+            return py::cast(matmul(a, b_var));
+        })
+        // Mixed-type operations: Tensor op Variable
+        .def("__radd__", [](std::shared_ptr<Variable> a, const Tensor& b) -> py::object {
+            auto b_var = std::make_shared<Variable>(b, false);
+            if (!axe::grad_enabled || !a->requires_grad) { return py::cast(b.add(a->data)); }
+            return py::cast(add(b_var, a));
+        })
+        .def("__rsub__", [](std::shared_ptr<Variable> a, const Tensor& b) -> py::object {
+            auto b_var = std::make_shared<Variable>(b, false);
+            if (!axe::grad_enabled || !a->requires_grad) { return py::cast(b.sub(a->data)); }
+            return py::cast(sub(b_var, a));
+        })
+        .def("__rmul__", [](std::shared_ptr<Variable> a, const Tensor& b) -> py::object {
+            auto b_var = std::make_shared<Variable>(b, false);
+            if (!axe::grad_enabled || !a->requires_grad) { return py::cast(b.mul(a->data)); }
+            return py::cast(mul(b_var, a));
+        })
+        .def("__rmatmul__", [](std::shared_ptr<Variable> a, const Tensor& b) -> py::object {
+            auto b_var = std::make_shared<Variable>(b, false);
+            if (!axe::grad_enabled || !a->requires_grad) { return py::cast(b.matmul(a->data)); }
+            return py::cast(matmul(b_var, a));
+        })
+        .def("sum", &sum);
+
+    m.def("_value_and_grad_cpp_multi", [](py::function fn, py::args py_args) {
+        bool any_requires_grad = false;
+        for (const auto& arg_handle : py_args) {
+            try {
+                auto var = arg_handle.cast<std::shared_ptr<Variable>>();
+                if (var->requires_grad) {
+                    any_requires_grad = true;
+                    break;
+                }
+            } catch (py::cast_error& e) {}
+        }
+
+        py::object result = fn(*py_args);
+        auto result_var = result.cast<std::shared_ptr<Variable>>();
+
+        if (any_requires_grad && result_var->requires_grad) {
+            result_var->backward();
+        }
+
+        py::list all_grads;
+        for (const auto& arg_handle : py_args) {
+            try {
+                auto var = arg_handle.cast<std::shared_ptr<Variable>>();
+                if (var->grad) {
+                    all_grads.append(py::cast(*var->grad));
+                } else {
+                    all_grads.append(py::none());
+                }
+            } catch (py::cast_error &e) {
+                all_grads.append(py::none());
+            }
+        }
+
+        return std::make_pair(result_var->data, all_grads);
+    });
+
+    m.def("is_grad_enabled", []() { return axe::grad_enabled; });
+    m.def("set_grad_enabled", [](bool enabled) { axe::grad_enabled = enabled; });
 }
 
 // Helper to get pybind11 format descriptor string for a DType
