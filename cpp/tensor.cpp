@@ -221,6 +221,39 @@ Tensor broadcast_op(const Tensor& a, const Tensor& b, std::function<T(T, T)> op)
     return result;
 }
 
+template<typename T>
+void transpose_impl(const Tensor& a, Tensor& result) {
+    using ConstEigenMap = Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>;
+    using EigenMap = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>;
+
+    ConstEigenMap eigen_a(static_cast<const T*>(a.data()), a.shape()[0], a.shape()[1]);
+    EigenMap eigen_result(static_cast<T*>(result.data()), result.shape()[0], result.shape()[1]);
+
+    eigen_result = eigen_a.transpose();
+}
+
+Tensor Tensor::transpose() const {
+    if (shape_.size() != 2) {
+        throw std::runtime_error("transpose expects a 2D tensor");
+    }
+
+    std::vector<size_t> result_shape = {shape_[1], shape_[0]};
+    Tensor result(result_shape, dtype_, device_);
+
+    switch (dtype_) {
+        case DType::Float32:
+            transpose_impl<float>(*this, result);
+            break;
+        case DType::Float64:
+            transpose_impl<double>(*this, result);
+            break;
+        default:
+            throw std::runtime_error("Unsupported dtype for transpose. Only Float32 and Float64 are supported.");
+    }
+
+    return result;
+}
+
 #define DISPATCH_DTYPE_BCAST(op_name, op) \
     switch (this->dtype()) { \
         case DType::Float32: return broadcast_op<float>(*this, other, op<float>); \
