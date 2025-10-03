@@ -6,7 +6,7 @@
 namespace axe {
 
 // --- AddOp ---
-AddOp::AddOp(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b) {
+AddOp::AddOp(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b, const std::string& file, int line) : Operation(file, line) {
     inputs = {a, b};
 }
 
@@ -33,7 +33,7 @@ void AddOp::backward(const Tensor& grad_output) {
 }
 
 // --- MulOp ---
-MulOp::MulOp(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b) {
+MulOp::MulOp(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b, const std::string& file, int line) : Operation(file, line) {
     inputs = {a, b};
 }
 
@@ -52,7 +52,7 @@ void MulOp::backward(const Tensor& grad_output) {
 }
 
 // --- SumOp ---
-SumOp::SumOp(std::shared_ptr<Variable> a) {
+SumOp::SumOp(std::shared_ptr<Variable> a, const std::string& file, int line) : Operation(file, line) {
     inputs = {a};
 }
 
@@ -73,7 +73,7 @@ void SumOp::backward(const Tensor& grad_output) {
 }
 
 // --- SubOp ---
-SubOp::SubOp(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b) {
+SubOp::SubOp(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b, const std::string& file, int line) : Operation(file, line) {
     inputs = {a, b};
 }
 
@@ -100,7 +100,7 @@ void SubOp::backward(const Tensor& grad_output) {
 }
 
 // --- MatMulOp ---
-MatMulOp::MatMulOp(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b) {
+MatMulOp::MatMulOp(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b, const std::string& file, int line) : Operation(file, line) {
     inputs = {a, b};
 }
 
@@ -134,13 +134,13 @@ static jit::Node get_or_create_jit_node(std::shared_ptr<Variable>& var) {
     return {var->jit_node_id.value(), var};
 }
 
-std::shared_ptr<Variable> add(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b) {
+std::shared_ptr<Variable> add(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b, const std::string& file, int line) {
     Tensor result_data = a->data.add(b->data);
     bool requires_grad = (a->requires_grad || b->requires_grad) && grad_enabled;
     auto result = std::make_shared<Variable>(result_data, requires_grad);
 
     if (requires_grad) {
-        result->creator = std::make_shared<AddOp>(a, b);
+        result->creator = std::make_shared<AddOp>(a, b, file, line);
     }
 
     if (jit::is_tracing) {
@@ -154,13 +154,13 @@ std::shared_ptr<Variable> add(std::shared_ptr<Variable> a, std::shared_ptr<Varia
     return result;
 }
 
-std::shared_ptr<Variable> mul(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b) {
+std::shared_ptr<Variable> mul(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b, const std::string& file, int line) {
     Tensor result_data = a->data.mul(b->data);
     bool requires_grad = (a->requires_grad || b->requires_grad) && grad_enabled;
     auto result = std::make_shared<Variable>(result_data, requires_grad);
 
     if (requires_grad) {
-        result->creator = std::make_shared<MulOp>(a, b);
+        result->creator = std::make_shared<MulOp>(a, b, file, line);
     }
 
     if (jit::is_tracing) {
@@ -174,13 +174,13 @@ std::shared_ptr<Variable> mul(std::shared_ptr<Variable> a, std::shared_ptr<Varia
     return result;
 }
 
-std::shared_ptr<Variable> matmul(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b) {
+std::shared_ptr<Variable> matmul(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b, const std::string& file, int line) {
     Tensor result_data = a->data.matmul(b->data);
     bool requires_grad = (a->requires_grad || b->requires_grad) && grad_enabled;
     auto result = std::make_shared<Variable>(result_data, requires_grad);
 
     if (requires_grad) {
-        result->creator = std::make_shared<MatMulOp>(a, b);
+        result->creator = std::make_shared<MatMulOp>(a, b, file, line);
     }
 
     if (jit::is_tracing) {
@@ -194,13 +194,13 @@ std::shared_ptr<Variable> matmul(std::shared_ptr<Variable> a, std::shared_ptr<Va
     return result;
 }
 
-std::shared_ptr<Variable> sum(std::shared_ptr<Variable> a) {
+std::shared_ptr<Variable> sum(std::shared_ptr<Variable> a, const std::string& file, int line) {
     Tensor result_data = a->data.sum();
     bool requires_grad = a->requires_grad && grad_enabled;
     auto result = std::make_shared<Variable>(result_data, requires_grad);
 
     if (requires_grad) {
-        result->creator = std::make_shared<SumOp>(a);
+        result->creator = std::make_shared<SumOp>(a, file, line);
     }
 
     if (jit::is_tracing) {
@@ -213,13 +213,13 @@ std::shared_ptr<Variable> sum(std::shared_ptr<Variable> a) {
     return result;
 }
 
-std::shared_ptr<Variable> sub(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b) {
+std::shared_ptr<Variable> sub(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b, const std::string& file, int line) {
     Tensor result_data = a->data.sub(b->data);
     bool requires_grad = (a->requires_grad || b->requires_grad) && grad_enabled;
     auto result = std::make_shared<Variable>(result_data, requires_grad);
 
     if (requires_grad) {
-        result->creator = std::make_shared<SubOp>(a, b);
+        result->creator = std::make_shared<SubOp>(a, b, file, line);
     }
 
     if (jit::is_tracing) {

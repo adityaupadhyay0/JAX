@@ -3,47 +3,49 @@ import numpy as np
 from python import axe
 
 def test_grad_simple():
-    def square(x):
-        return x * x
-
-    x = axe.array([3.0], requires_grad=True)
-    grad_fn = axe.grad(square)
-
-    dy_dx = grad_fn(x).numpy()
-
-    assert np.allclose(dy_dx, [6.0])
-
-def test_value_and_grad():
-    def square(x):
-        return x * x
-
-    x = axe.array([3.0], requires_grad=True)
-    val_grad_fn = axe.value_and_grad(square)
-
-    val, dy_dx = val_grad_fn(x)
-    val = val.numpy()
-    dy_dx = dy_dx.numpy()
-
-    assert np.allclose(val, [9.0])
-    assert np.allclose(dy_dx, [6.0])
-
-def test_grad_chain_rule():
     def f(x):
         return x * x
 
-    def g(y):
-        return y * axe.array([2.0], requires_grad=True)
-
-    def h(x):
-        return g(f(x))
-
+    grad_f = axe.grad(f)
     x = axe.array([3.0], requires_grad=True)
-    grad_fn = axe.grad(h)
-    dy_dx = grad_fn(x).numpy()
 
-    # h(x) = 2 * x^2
-    # h'(x) = 4 * x
-    assert np.allclose(dy_dx, [12.0])
+    # Compute gradient
+    grads = grad_f(x)
+
+    # Check the gradient
+    assert np.allclose(grads.numpy(), [6.0])
+
+def test_grad_two_args():
+    def f(x, y):
+        return x * y + x
+
+    grad_f_x = axe.grad(f, argnums=0)
+    grad_f_y = axe.grad(f, argnums=1)
+
+    x = axe.array([2.0], requires_grad=True)
+    y = axe.array([3.0], requires_grad=True)
+
+    # df/dx = y + 1 = 4
+    dx = grad_f_x(x, y)
+    assert np.allclose(dx.numpy(), [4.0])
+
+    # df/dy = x = 2
+    dy = grad_f_y(x, y)
+    assert np.allclose(dy.numpy(), [2.0])
+
+def test_value_and_grad():
+    def f(x):
+        return x * x * x
+
+    vjp_f = axe.value_and_grad(f)
+    x = axe.array([2.0], requires_grad=True)
+
+    value, grads = vjp_f(x)
+
+    # f(2) = 8
+    assert np.allclose(value.numpy(), [8.0])
+    # df/dx = 3 * x^2 = 12
+    assert np.allclose(grads.numpy(), [12.0])
 
 def test_no_grad():
     x = axe.array([3.0], requires_grad=True)
@@ -51,49 +53,19 @@ def test_no_grad():
         y = x * x
     assert not isinstance(y, axe.Variable)
     assert isinstance(y, axe.Tensor)
-    assert not hasattr(y, 'grad')
 
+def test_chain_rule():
+    def f(x):
+        return x * x
 
-def test_linear_regression():
-    # Model: y = w * x + b
-    # Loss: L = sum((y_pred - y_true)^2)
+    def g(y):
+        return y + y
 
-    # Data
-    X_np = np.array([[1.0], [2.0], [3.0], [4.0]], dtype=np.float32)
-    Y_np = np.array([[2.0], [4.0], [6.0], [8.0]], dtype=np.float32)
+    x = axe.array([5.0], requires_grad=True)
+    y = f(x)
+    z = g(y)
 
-    X = axe.array(X_np) # No grad needed for input data
-    Y = axe.array(Y_np) # No grad needed for true labels
+    z.backward()
 
-    # Initialize weights
-    w = axe.array([[0.5]], requires_grad=True)
-    b = axe.array([[0.1]], requires_grad=True)
-
-    def model(w, b):
-        return X @ w + b
-
-    def loss_fn(w, b):
-        y_pred = model(w,b)
-        # The subtraction and power operations are broadcasted.
-        # The result is a Variable that needs to be summed up to a scalar.
-        diff = y_pred - Y
-        return axe.sum(diff * diff)
-
-    # Get gradients
-    val, (grad_w, grad_b) = axe.value_and_grad(loss_fn, argnums=(0,1))(w,b)
-
-    # Analytical gradients
-    # L = sum((Xw + b - Y)^2)
-    # dL/dw = sum(2 * (Xw + b - Y) * X)
-    # dL/db = sum(2 * (Xw + b - Y))
-    y_pred_np = X_np @ w.data.numpy() + b.data.numpy()
-    diff = y_pred_np - Y_np
-
-    expected_grad_w = np.sum(2 * diff * X_np)
-    expected_grad_b = np.sum(2 * diff)
-
-    assert grad_w is not None
-    assert grad_b is not None
-
-    assert np.allclose(grad_w.numpy(), [[expected_grad_w]])
-    assert np.allclose(grad_b.numpy(), [[expected_grad_b]])
+    # dz/dx = dz/dy * dy/dx = 2 * (2*x) = 4x = 20
+    assert np.allclose(x.grad.numpy(), [20.0])

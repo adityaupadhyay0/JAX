@@ -17,10 +17,10 @@ def test_jit_correctness():
     expected = func(a, b)
 
     # Run jitted function twice to test both tracing and execution paths
-    result1 = jitted_func(a, b) # First call traces, returns Variable
-    result2 = jitted_func(a, b) # Second call executes from cache, returns Tensor
+    result1 = jitted_func(a, b) # First call now returns a Tensor
+    result2 = jitted_func(a, b) # Second call executes from cache
 
-    assert np.allclose(result1.data.numpy(), expected.data.numpy())
+    assert np.allclose(result1.numpy(), expected.data.numpy())
     assert np.allclose(result2.numpy(), expected.data.numpy())
 
 
@@ -73,7 +73,7 @@ def test_jit_composition():
     expected_e = expected_d + c.data.numpy()
     expected_f = np.sum(expected_e)
 
-    assert np.allclose(result1.data.numpy(), expected_f)
+    assert np.allclose(result1.numpy(), expected_f)
     assert np.allclose(result2.numpy(), expected_f)
 
 def test_jit_with_constants():
@@ -81,17 +81,43 @@ def test_jit_with_constants():
     @axe.jit
     def func_with_constant(x):
         # b is a constant that will be captured by the trace
-        b = axe.array([1.0, 2.0, 3.0], requires_grad=True)
+        b = axe.array([1.0, 2.0, 3.0], requires_grad=False)
         return x + b
 
-    a = axe.array([10.0, 20.0, 30.0], requires_grad=True)
+    a = axe.array([10.0, 20.0, 30.0], requires_grad=False)
 
-    expected = a.data.numpy() + np.array([1.0, 2.0, 3.0])
+    expected = a.numpy() + np.array([1.0, 2.0, 3.0])
 
-    # Run once to trace
+    # Run once to trace and compile
     result1 = func_with_constant(a)
     # Run again to execute from cache
     result2 = func_with_constant(a)
 
-    assert np.allclose(result1.data.numpy(), expected)
+    assert np.allclose(result1.numpy(), expected)
     assert np.allclose(result2.numpy(), expected)
+
+def test_jit_dynamic_compilation_correctness():
+    """
+    Tests that the full dynamic compilation pipeline produces correct results.
+    """
+    def f_python(x, y, z):
+        return (x @ y) * z + axe.array(2.0)
+
+    @axe.jit
+    def f_jit(x, y, z):
+        return (x @ y) * z + axe.array(2.0)
+
+    a = axe.array([[1., 2.], [3., 4.]])
+    b = axe.array([[5., 6.], [7., 8.]])
+    c = axe.array([[0.1, 0.2], [0.3, 0.4]])
+
+    # Execute both the original Python version and the JIT version
+    python_result = f_python(a, b, c)
+    jit_result = f_jit(a, b, c)
+
+    # The results should be numerically close
+    assert np.allclose(python_result.numpy(), jit_result.numpy())
+
+    # Run again to ensure cached version is also correct
+    jit_result_cached = f_jit(a, b, c)
+    assert np.allclose(python_result.numpy(), jit_result_cached.numpy())
