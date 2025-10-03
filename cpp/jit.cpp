@@ -1,6 +1,11 @@
 #include "include/jit.h"
+#include "include/optimizer.h"
 #include <stdexcept>
 #include <memory>
+#include <unordered_map>
+#include <algorithm>
+#include <unordered_set>
+#include <utility> // For std::move
 
 namespace axe {
 namespace jit {
@@ -8,8 +13,6 @@ namespace jit {
 // --- Global JIT State ---
 std::unique_ptr<JitGraph> active_graph = nullptr;
 bool is_tracing = false;
-
-#include <unordered_map>
 
 // --- JitGraph Methods ---
 Node JitGraph::add_input(std::shared_ptr<Variable> var) {
@@ -30,6 +33,33 @@ void JitGraph::add_op(const TraceableOp& op) {
 
 void JitGraph::set_output_node(const Node& node) {
     output_node_ = node;
+}
+
+void JitGraph::optimize() {
+    Optimizer optimizer;
+
+    // Add the core optimization passes in a logical order
+    optimizer.add_pass(std::make_unique<AlgebraicSimplification>());
+    optimizer.add_pass(std::make_unique<StrengthReduction>());
+    optimizer.add_pass(std::make_unique<ConstantFolding>());
+    optimizer.add_pass(std::make_unique<CommonSubexpressionElimination>());
+    // Run fusion before DCE to clean up any ops that become dead after fusion
+    optimizer.add_pass(std::make_unique<OperationFusion>());
+    optimizer.add_pass(std::make_unique<DeadCodeElimination>());
+
+    optimizer.run(*this);
+}
+
+bool JitGraph::is_constant(const Node& node) const {
+    return constant_inputs_.count(node.id);
+}
+
+Tensor JitGraph::get_constant_value(const Node& node) const {
+    return constant_inputs_.at(node.id);
+}
+
+void JitGraph::convert_to_constant(const Node& node, Tensor value) {
+    constant_inputs_.emplace(node.id, std::move(value));
 }
 
 Tensor JitGraph::execute(const std::vector<Tensor>& inputs) {
@@ -72,6 +102,10 @@ Tensor JitGraph::execute(const std::vector<Tensor>& inputs) {
                 break;
             case OpType::Sum:
                 node_values.emplace(op.output.id, op_inputs[0].sum());
+                break;
+            case OpType::FusedMulAdd:
+                // Fused operation: (a * b) + c
+                node_values.emplace(op.output.id, op_inputs[0].mul(op_inputs[1]).add(op_inputs[2]));
                 break;
         }
     }

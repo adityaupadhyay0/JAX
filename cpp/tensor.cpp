@@ -1,7 +1,9 @@
 #include "tensor.h"
+#include "include/exception.h"
 #include <cstring>
 #include <stdexcept>
 #include <numeric>
+#include <sstream>
 #include <functional>
 #include <Eigen/Dense>
 
@@ -298,14 +300,28 @@ void matmul_impl(const Tensor& a, const Tensor& b, Tensor& result) {
 }
 
 Tensor Tensor::matmul(const Tensor& other) const {
+    auto format_shape = [](const std::vector<size_t>& shape) {
+        std::stringstream ss;
+        ss << "(";
+        for (size_t i = 0; i < shape.size(); ++i) {
+            ss << shape[i] << (i == shape.size() - 1 ? "" : ", ");
+        }
+        ss << ")";
+        return ss.str();
+    };
+
     if (shape_.size() != 2 || other.shape().size() != 2) {
-        throw std::runtime_error("matmul expects 2D tensors");
+        throw AxeException("matmul expects 2D tensors");
     }
     if (shape_[1] != other.shape()[0]) {
-        throw std::runtime_error("Incompatible dimensions for matmul");
+        std::stringstream ss;
+        ss << "Incompatible dimensions for matmul: shapes "
+           << format_shape(shape_) << " and " << format_shape(other.shape())
+           << " cannot be multiplied.";
+        throw AxeException(ss.str());
     }
     if (dtype_ != other.dtype()) {
-        throw std::runtime_error("Mismatched dtypes for matmul");
+        throw AxeException("Mismatched dtypes for matmul");
     }
 
     std::vector<size_t> result_shape = {shape_[0], other.shape()[1]};
@@ -319,7 +335,7 @@ Tensor Tensor::matmul(const Tensor& other) const {
             matmul_impl<double>(*this, other, result);
             break;
         default:
-            throw std::runtime_error("Unsupported dtype for matmul. Only Float32 and Float64 are supported.");
+            throw AxeException("Unsupported dtype for matmul. Only Float32 and Float64 are supported.");
     }
 
     return result;
