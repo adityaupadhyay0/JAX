@@ -3,6 +3,7 @@
 #include <memory>
 #include <cstddef>
 #include <cstdint>
+#include "allocator.h"
 
 namespace axe {
 
@@ -45,6 +46,7 @@ public:
 
     // Batching utilities for vmap
     Tensor slice(size_t dim, size_t index) const;
+    void add_from_slice(const Tensor& source, size_t dim, size_t index);
     static Tensor stack(const std::vector<Tensor>& tensors, size_t dim);
 
 private:

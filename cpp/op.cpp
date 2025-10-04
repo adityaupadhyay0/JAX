@@ -154,6 +154,71 @@ std::shared_ptr<Variable> add(std::shared_ptr<Variable> a, std::shared_ptr<Varia
     return result;
 }
 
+// --- SliceOp ---
+SliceOp::SliceOp(std::shared_ptr<Variable> a, size_t dim, size_t index) : dim(dim), index(index) {
+    inputs = {a};
+}
+
+void SliceOp::backward(const Tensor& grad_output) {
+    auto a = inputs[0];
+    if (a->requires_grad) {
+        if (!a->grad) {
+            a->grad = std::make_shared<Tensor>(Tensor::zeros(a->data.shape(), a->data.dtype(), a->data.device()));
+        }
+        // Add the gradient output to the correct slice of the input's gradient tensor.
+        a->grad->add_from_slice(grad_output, this->dim, this->index);
+    }
+}
+
+std::shared_ptr<Variable> slice(std::shared_ptr<Variable> a, size_t dim, size_t index) {
+    Tensor result_data = a->data.slice(dim, index);
+    bool requires_grad = a->requires_grad && grad_enabled;
+    auto result = std::make_shared<Variable>(result_data, requires_grad);
+    if (requires_grad) {
+        result->creator = std::make_shared<SliceOp>(a, dim, index);
+    }
+    return result;
+}
+
+
+// --- StackOp ---
+StackOp::StackOp(const std::vector<std::shared_ptr<Variable>>& inputs, size_t dim) : dim(dim) {
+    this->inputs = inputs;
+}
+
+void StackOp::backward(const Tensor& grad_output) {
+    for (size_t i = 0; i < inputs.size(); ++i) {
+        auto input = inputs[i];
+        if (input->requires_grad) {
+            if (!input->grad) {
+                input->grad = std::make_shared<Tensor>(Tensor::zeros(input->data.shape(), input->data.dtype(), input->data.device()));
+            }
+            Tensor grad_slice = grad_output.slice(dim, i);
+            *input->grad = input->grad->add(grad_slice);
+        }
+    }
+}
+
+std::shared_ptr<Variable> stack(const std::vector<std::shared_ptr<Variable>>& inputs, size_t dim) {
+    std::vector<Tensor> tensors;
+    tensors.reserve(inputs.size());
+    bool requires_grad = false;
+    for (const auto& var : inputs) {
+        tensors.push_back(var->data);
+        if (var->requires_grad) {
+            requires_grad = true;
+        }
+    }
+    requires_grad = requires_grad && grad_enabled;
+
+    Tensor result_data = Tensor::stack(tensors, dim);
+    auto result = std::make_shared<Variable>(result_data, requires_grad);
+    if (requires_grad) {
+        result->creator = std::make_shared<StackOp>(inputs, dim);
+    }
+    return result;
+}
+
 std::shared_ptr<Variable> mul(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b, const std::string& file, int line) {
     Tensor result_data = a->data.mul(b->data);
     bool requires_grad = (a->requires_grad || b->requires_grad) && grad_enabled;

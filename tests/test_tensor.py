@@ -8,7 +8,7 @@ def test_device_enum():
     try:
         zeros([2, 2], dtype='float32', device='gpu')
     except RuntimeError as e:
-        assert 'GPU device support not yet implemented' in str(e)
+            assert 'GPU allocator not yet implemented' in str(e)
 
 def test_zeros():
     t = zeros([2, 3], dtype='float32')

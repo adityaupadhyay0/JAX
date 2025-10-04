@@ -55,4 +55,22 @@ std::shared_ptr<Variable> matmul(std::shared_ptr<Variable> a, std::shared_ptr<Va
 std::shared_ptr<Variable> sum(std::shared_ptr<Variable> a, const std::string& file = "", int line = 0);
 std::shared_ptr<Variable> sub(std::shared_ptr<Variable> a, std::shared_ptr<Variable> b, const std::string& file = "", int line = 0);
 
+class SliceOp : public Operation {
+public:
+    size_t dim;
+    size_t index;
+    SliceOp(std::shared_ptr<Variable> a, size_t dim, size_t index);
+    void backward(const Tensor& grad_output) override;
+};
+
+class StackOp : public Operation {
+public:
+    size_t dim;
+    StackOp(const std::vector<std::shared_ptr<Variable>>& inputs, size_t dim);
+    void backward(const Tensor& grad_output) override;
+};
+
+std::shared_ptr<Variable> slice(std::shared_ptr<Variable> a, size_t dim, size_t index);
+std::shared_ptr<Variable> stack(const std::vector<std::shared_ptr<Variable>>& inputs, size_t dim);
+
 } // namespace axe

@@ -1,5 +1,6 @@
 #include "tensor.h"
 #include "include/exception.h"
+#include "include/allocator.h"
 #include <cstring>
 #include <stdexcept>
 #include <numeric>
@@ -22,11 +23,11 @@ size_t dtype_size(DType dtype) {
 
 Tensor::Tensor(const std::vector<size_t>& shape, DType dtype, Device device)
     : shape_(shape), dtype_(dtype), device_(device), data_(nullptr), ref_count_ptr_(new size_t(1)) {
-    if (device_ == Device::GPU) {
-        throw std::runtime_error("GPU device support not yet implemented");
+    size_t size_in_bytes = nbytes();
+    if (size_in_bytes > 0) {
+        data_ = memory::Allocator::get_instance().allocate(size_in_bytes, device_);
+        if (!data_) throw std::bad_alloc();
     }
-    data_ = malloc(nbytes());
-    if (!data_) throw std::bad_alloc();
 }
 
 Tensor::Tensor(const Tensor& other)
@@ -37,7 +38,9 @@ Tensor::Tensor(const Tensor& other)
 Tensor& Tensor::operator=(const Tensor& other) {
     if (this != &other) {
         if (--(*ref_count_ptr_) == 0) {
-            if (data_) free(data_);
+            if (data_) {
+                memory::Allocator::get_instance().deallocate(data_, nbytes(), device_);
+            }
             delete ref_count_ptr_;
         }
         shape_ = other.shape_;
@@ -52,7 +55,9 @@ Tensor& Tensor::operator=(const Tensor& other) {
 
 Tensor::~Tensor() {
     if (--(*ref_count_ptr_) == 0) {
-        if (data_) free(data_);
+        if (data_) {
+            memory::Allocator::get_instance().deallocate(data_, nbytes(), device_);
+        }
         delete ref_count_ptr_;
     }
 }
@@ -372,6 +377,41 @@ Tensor Tensor::matmul(const Tensor& other) const {
     }
 
     return result;
+}
+
+void Tensor::add_from_slice(const Tensor& source, size_t dim, size_t index) {
+    if (device_ != source.device() || dtype_ != source.dtype()) {
+        throw AxeException("Mismatched device or dtype for add_from_slice");
+    }
+
+    // This is a simplified implementation assuming float32 for brevity.
+    // A full implementation would handle different dtypes.
+    if (dtype_ != DType::Float32) {
+        throw AxeException("add_from_slice currently only supports Float32");
+    }
+
+    float* dest_ptr = static_cast<float*>(data_);
+    const float* src_ptr = static_cast<const float*>(source.data());
+
+    size_t inner_nelements = 1;
+    for (size_t i = dim + 1; i < shape_.size(); ++i) {
+        inner_nelements *= shape_[i];
+    }
+    const size_t copy_size = inner_nelements;
+
+    size_t outer_nelements = 1;
+    for (size_t i = 0; i < dim; ++i) {
+        outer_nelements *= shape_[i];
+    }
+    const size_t dim_stride = inner_nelements * shape_[dim];
+
+    for (size_t i = 0; i < outer_nelements; ++i) {
+        float* dest_offset = dest_ptr + (i * dim_stride + index * inner_nelements);
+        const float* src_offset = src_ptr + (i * copy_size);
+        for(size_t j = 0; j < copy_size; ++j) {
+            dest_offset[j] += src_offset[j];
+        }
+    }
 }
 
 } // namespace axe

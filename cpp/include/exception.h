@@ -19,4 +19,16 @@ public:
     using std::runtime_error::runtime_error;
 };
 
+/**
+ * @class OOMError
+ * @brief An exception specific to out-of-memory errors.
+ *
+ * This allows for more specific error handling when memory allocation fails,
+ * enabling features like the Smart OOM Handler.
+ */
+class OOMError : public AxeException {
+public:
+    using AxeException::AxeException;
+};
+
 } // namespace axe
