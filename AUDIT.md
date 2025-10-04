@@ -1,6 +1,6 @@
-# AXE Project Audit: Phases 1-4
+# AXE Project Audit: Phases 1-6
 
-This document contains a comprehensive audit of the AXE project, focusing on the completion status of tasks outlined in Phases 1 through 4 of the `todo.md` file. This report supersedes all previous audit documents.
+This document contains a comprehensive audit of the AXE project, focusing on the completion status of tasks outlined in Phases 1 through 6 of the `todo.md` file. This report supersedes all previous audit documents.
 
 ---
 
@@ -94,3 +94,52 @@ This document contains a comprehensive audit of the AXE project, focusing on the
 - **JIT function runs correctly**: ✅ (Verified by `test_jit_correctness` in `tests/test_jit.py`)
 - **Second call uses cache**: ✅ (Verified with mocking in `test_jit_caching` in `tests/test_jit.py`)
 - **Compare speed vs non-JIT**: ❌ (No performance benchmarks are included in the test suite)
+
+---
+
+## 🟡 PHASE 5: JIT Compiler - Part 2
+
+### Optimization
+- **Implement operation fusion**: ✅ (Implemented in `cpp/optimizer.cpp` as `OperationFusion`)
+- **Add constant folding**: ✅ (Implemented in `cpp/optimizer.cpp` as `ConstantFolding`)
+- **Remove dead code**: ✅ (Implemented in `cpp/optimizer.cpp` as `DeadCodeElimination`)
+- **Common subexpression elimination**: ✅ (Implemented in `cpp/optimizer.cpp` as `CommonSubexpressionElimination`)
+
+### XLA Integration
+- **Generate XLA HLO**: ⚠️ (Strategic pivot. The project did not integrate XLA. Instead, a custom dynamic C++ compiler was built.)
+- **Compile to executable**: ✅ (A custom `DynamicCompiler` in `cpp/dynamic_compiler.cpp` compiles C++ source to a shared library.)
+- **Run compiled code**: ✅ (The `JitEngine` in `cpp/jit_engine.cpp` manages caching and execution of compiled functions.)
+
+### Test
+- **Optimizations work correctly**: ❌ (No specific tests found for individual optimization passes like constant folding or CSE. `tests/test_jit.py` only verifies end-to-end correctness.)
+- **Faster than JAX cold start**: ❌ (No performance benchmarks found.)
+- **Measure compilation time**: ❌ (No mechanism for measuring or reporting compilation time was found.)
+- **MILESTONE: 2x faster compilation than JAX**: ❌ (Not achieved due to lack of benchmarks.)
+
+---
+
+## 🟡 PHASE 6: Better Errors + AI Suggestions
+
+### Error System
+- **Catch shape mismatches**: ✅ (Verified in `cpp/tensor.cpp` inside `matmul`, which throws `AxeException`.)
+- **Detect type errors**: ✅ (Verified in `cpp/tensor.cpp` for `matmul`.)
+- **Track operation sources**: ✅ (Implemented. `python/axe.py` uses `inspect` to get the caller's location and passes it to the C++ `Operation` constructor, as seen in `cpp/op.cpp`.)
+- **Generate helpful messages**: ⚠️ (Basic error messages are present, but they are not the "helpful" or "suggestive" type described in the `todo.md`.)
+
+### 🌟 WOW: AI-Powered Error Messages
+- **"Did you mean...?" with code snippets**: ❌ (Not implemented.)
+- **Show exactly which line caused error**: ✅ (Partially implemented via source tracking, but not fully integrated into the exception message.)
+- **Suggest batch size if OOM**: ❌ (Not implemented.)
+- **Link to relevant docs/examples**: ❌ (Not implemented.)
+- **Common mistake detection**: ❌ (Not implemented.)
+
+### User Experience
+- **Clear device mismatch errors**: ❌ (Not implemented.)
+- **Validate inputs early**: ✅ (Some basic validation is present.)
+- **Emoji indicators (⚠️ 💡 ✅)**: ❌ (Not implemented.)
+- **Color-coded severity**: ❌ (Not implemented.)
+
+### Test
+- **All error messages are clear**: ❌ (No tests specifically for validating the content or clarity of error messages were found.)
+- **Suggestions fix 80% of issues**: ❌ (Not applicable as no suggestions are implemented.)
+- **Way better than JAX errors**: ❌ (Not achieved.)
