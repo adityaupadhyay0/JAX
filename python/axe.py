@@ -2,19 +2,37 @@ import numpy as np
 import contextlib
 import functools
 import inspect
-from ._axe import Tensor, Device, DType, Variable, AxeError
-from ._axe import _add, _sub, _mul, _matmul, _sum
-from ._axe import _value_and_grad_cpp_multi
-from ._axe import set_grad_enabled, is_grad_enabled
-from ._axe import jit as _jit
+from _axe import Tensor, Device, DType, Variable, AxeError, OOMError, memory
+from _axe import _add, _sub, _mul, _matmul, _sum, _stack
+from _axe import _value_and_grad_cpp_multi
+from _axe import set_grad_enabled, is_grad_enabled
+from _axe import jit as _jit
+from _axe import _checkpoint
+from _axe import _vmap_impl
+
+def _to_dtype_enum(dtype):
+    if isinstance(dtype, DType):
+        return dtype
+    if isinstance(dtype, str):
+        try:
+            return getattr(DType, dtype.capitalize())
+        except AttributeError:
+            raise ValueError(f"Unsupported dtype string: {dtype}")
+    raise TypeError(f"Unsupported dtype type: {type(dtype)}")
+
+def _to_numpy_dtype_str(dtype):
+    if isinstance(dtype, str):
+        return dtype
+    if isinstance(dtype, DType):
+        return dtype.name.lower()
+    raise TypeError(f"Unsupported dtype type for numpy conversion: {type(dtype)}")
 
 # --- Save Original C++ Methods ---
-# This is crucial to prevent recursion in our Python operator overrides
 _original_tensor_add = Tensor.__add__
 _original_tensor_sub = Tensor.__sub__
 _original_tensor_mul = Tensor.__mul__
-_original_tensor_matmul = Tensor.__matmul__
 _original_tensor_truediv = Tensor.__truediv__
+_original_tensor_matmul = Tensor.__matmul__
 _original_tensor_sum = Tensor.sum
 
 def _get_caller_location(depth=2):
@@ -30,17 +48,16 @@ def _ensure_variable(obj):
     if isinstance(obj, Variable):
         return obj
     if isinstance(obj, Tensor):
-        return Variable(obj, requires_grad=False)
-    return Variable(array(obj), requires_grad=False)
+        return Variable(obj)
+    # Handle python scalars by creating a new Variable from scratch
+    return array(obj)
 
-def _should_build_graph(a, b):
+def _should_build_graph(*args):
     """Determines if an operation should be tracked in the computation graph."""
     if _jit.is_tracing():
         return True
     if is_grad_enabled():
-        is_a_grad_var = isinstance(a, Variable) and a.requires_grad
-        is_b_grad_var = isinstance(b, Variable) and b.requires_grad
-        return is_a_grad_var or is_b_grad_var
+        return any(isinstance(arg, Variable) and arg.requires_grad for arg in args)
     return False
 
 def _clear_grads(*args):
@@ -52,55 +69,54 @@ def _clear_grads(*args):
 # --- Python Operator Functions ---
 
 def add(a, b):
-    if not _should_build_graph(a, b):
-        a_data = a.data if isinstance(a, Variable) else a
-        b_data = b.data if isinstance(b, Variable) else b
-        return _original_tensor_add(a_data, b_data)
+    va = _ensure_variable(a)
+    vb = _ensure_variable(b)
+    if not _should_build_graph(va, vb):
+        return Variable(_original_tensor_add(va.data, vb.data))
     file, line = _get_caller_location()
-    return _add(_ensure_variable(a), _ensure_variable(b), file, line)
+    return _add(va, vb, file, line)
 
 def sub(a, b):
-    if not _should_build_graph(a, b):
-        a_data = a.data if isinstance(a, Variable) else a
-        b_data = b.data if isinstance(b, Variable) else b
-        return _original_tensor_sub(a_data, b_data)
+    va = _ensure_variable(a)
+    vb = _ensure_variable(b)
+    if not _should_build_graph(va, vb):
+        return Variable(_original_tensor_sub(va.data, vb.data))
     file, line = _get_caller_location()
-    return _sub(_ensure_variable(a), _ensure_variable(b), file, line)
+    return _sub(va, vb, file, line)
 
 def mul(a, b):
-    if not _should_build_graph(a, b):
-        a_data = a.data if isinstance(a, Variable) else a
-        b_data = b.data if isinstance(b, Variable) else b
-        return _original_tensor_mul(a_data, b_data)
+    va = _ensure_variable(a)
+    vb = _ensure_variable(b)
+    if not _should_build_graph(va, vb):
+        return Variable(_original_tensor_mul(va.data, vb.data))
     file, line = _get_caller_location()
-    return _mul(_ensure_variable(a), _ensure_variable(b), file, line)
+    return _mul(va, vb, file, line)
 
 def matmul(a, b):
-    if not _should_build_graph(a, b):
-        a_data = a.data if isinstance(a, Variable) else a
-        b_data = b.data if isinstance(b, Variable) else b
-        return _original_tensor_matmul(a_data, b_data)
+    va = _ensure_variable(a)
+    vb = _ensure_variable(b)
+    if not _should_build_graph(va, vb):
+        return Variable(_original_tensor_matmul(va.data, vb.data))
     file, line = _get_caller_location()
-    return _matmul(_ensure_variable(a), _ensure_variable(b), file, line)
+    return _matmul(va, vb, file, line)
 
 def truediv(a, b):
-    a_data = a.data if isinstance(a, Variable) else a
-    b_data = b.data if isinstance(b, Variable) else b
-    return _original_tensor_truediv(a_data, b_data)
+    # div does not support gradients, so we don't build a graph.
+    va = _ensure_variable(a)
+    vb = _ensure_variable(b)
+    return Variable(_original_tensor_truediv(va.data, vb.data))
 
 def sum_op(x, axis=None, keepdims=False):
     if axis is not None or keepdims:
         raise NotImplementedError("sum with axis/keepdims is not yet supported.")
-    if not isinstance(x, (Tensor, Variable)):
-        raise TypeError(f"sum() expected a Tensor or Variable, but got {type(x)}")
-    if _should_build_graph(x, x):
-        file, line = _get_caller_location()
-        return _sum(_ensure_variable(x), file, line)
-    else:
-        data = x.data if isinstance(x, Variable) else x
-        return _original_tensor_sum(data)
+    vx = _ensure_variable(x)
+    if not _should_build_graph(vx):
+        return Variable(_original_tensor_sum(vx.data))
+    file, line = _get_caller_location()
+    return _sum(vx, file, line)
 
 # --- Monkey-patching operators ---
+# We only patch Variable, since Tensor ops should not build graphs.
 Variable.__add__ = add
 Variable.__sub__ = sub
 Variable.__mul__ = mul
@@ -112,16 +128,6 @@ Variable.__rmul__ = lambda b, a: mul(a, b)
 Variable.__rmatmul__ = lambda b, a: matmul(a, b)
 Variable.sum = sum_op
 
-Tensor.__add__ = add
-Tensor.__sub__ = sub
-Tensor.__mul__ = mul
-Tensor.__matmul__ = matmul
-Tensor.__truediv__ = truediv
-Tensor.__radd__ = lambda b, a: add(a, b)
-Tensor.__rsub__ = lambda b, a: sub(a, b)
-Tensor.__rmul__ = lambda b, a: mul(a, b)
-Tensor.__rmatmul__ = lambda b, a: matmul(a, b)
-Tensor.sum = sum_op
 
 # --- JIT Compilation ---
 
@@ -153,57 +159,29 @@ def jit(fn):
             cache[signature] = graph
         graph = cache[signature]
         input_tensors = [arg.data if isinstance(arg, Variable) else arg for arg in args if isinstance(arg, (Tensor, Variable))]
-        return _jit.jit_execute_with_engine(graph, input_tensors)
+        return Variable(_jit.jit_execute_with_engine(graph, input_tensors))
     return jit_wrapper
 
-
-try:
-    from ._axe import _vmap_impl
-except ImportError:
-    _vmap_impl = None
 
 # --- Vectorization ---
 
 def vmap(fn=None, in_axes=0, out_axes=0):
-    """
-    Creates a function that maps `fn` over designated axes of the inputs.
-    This is a high-performance alternative to a Python for-loop.
-
-    Can be used as a decorator, e.g. `@vmap` or `@vmap(in_axes=...)`.
-
-    Args:
-        fn (Callable, optional): The function to be mapped. Defaults to None.
-        in_axes (int or tuple): Specifies the axis of the inputs to be mapped over.
-        out_axes (int): Specifies the axis of the outputs to be mapped over.
-
-    Returns:
-        Callable: A new function that maps `fn` over the specified axes.
-    """
     def decorator(fn_):
         @functools.wraps(fn_)
         def vmapped_fn(*args):
             if _jit.is_tracing():
                 raise NotImplementedError("jit(vmap(f)) is not supported. Try vmap(jit(f)) instead.")
-            if _vmap_impl is None:
-                raise NotImplementedError("vmap is not implemented in the C++ backend yet.")
 
-            # The actual logic is in the C++ backend for performance.
             processed_args = []
             for arg in args:
-                # Ensure that all inputs are Tensors or Variables for the C++ backend
-                if not isinstance(arg, (Tensor, Variable)):
-                    processed_args.append(array(arg))
-                else:
-                    processed_args.append(arg)
+                processed_args.append(_ensure_variable(arg))
 
             return _vmap_impl(fn_, tuple(processed_args), in_axes, out_axes)
         return vmapped_fn
 
     if fn is None:
-        # This is the case where it's called with arguments, like @vmap(in_axes=0)
         return decorator
     else:
-        # This is the case where it's called without arguments, like @vmap
         return decorator(fn)
 
 
@@ -230,13 +208,22 @@ def value_and_grad(fn, argnums=0):
                  arg.requires_grad = True
             wrapped_args.append(arg)
 
-        value, all_grads = _value_and_grad_cpp_multi(fn, *wrapped_args)
+        value_variable = fn(*wrapped_args)
+
+        value_variable.backward()
+
+        all_grads = [arg.grad for arg in wrapped_args]
 
         if isinstance(argnums, int):
             grads = all_grads[argnums]
         else:
             grads = tuple(all_grads[i] for i in argnums if i < len(all_grads))
-        return value, grads
+
+        # Wrap gradients in Variables to maintain API consistency
+        if isinstance(grads, tuple):
+            return value_variable.data, tuple(Variable(g) if g is not None else None for g in grads)
+        else:
+            return value_variable.data, Variable(grads) if grads is not None else None
     return vjp_fn
 
 def grad(fn, argnums=0):
@@ -267,38 +254,39 @@ def array(obj, dtype=None, device='cpu', requires_grad=False):
     if dtype is None:
         dtype = 'float32'
 
-    np_arr = np_arr.astype(dtype)
+    numpy_dtype_str = _to_numpy_dtype_str(dtype)
+    np_arr = np_arr.astype(numpy_dtype_str)
 
-    if requires_grad and 'float' not in dtype:
+    if requires_grad and 'float' not in numpy_dtype_str:
         raise ValueError("Only floating point tensors can require gradients")
 
     dev = Device.CPU if device == 'cpu' else Device.GPU
-    try:
-        dt_str = dtype.capitalize() if 'int' not in dtype else dtype
-        dt = getattr(DType, dt_str)
-    except AttributeError:
-        raise ValueError(f"Unsupported dtype: {dtype}")
+    dt_enum = _to_dtype_enum(dtype)
 
     shape = [] if is_scalar else list(np_arr.shape)
-    t = Tensor(shape, dt, dev)
+    t = Tensor(shape, dt_enum, dev)
     np.copyto(np.array(t, copy=False), np_arr.reshape(t.shape))
 
     if requires_grad and is_grad_enabled():
         return Variable(t, requires_grad=True)
     else:
-        return t
+        # Always return a Variable for API consistency
+        return Variable(t, requires_grad=False)
 
 def zeros(shape, dtype='float32', device='cpu', requires_grad=False):
-    t = Tensor.zeros(shape, getattr(DType, dtype.capitalize()), Device.CPU if device == 'cpu' else Device.GPU)
-    return Variable(t, requires_grad=True) if requires_grad else t
+    dt_enum = _to_dtype_enum(dtype)
+    t = Tensor.zeros(shape, dt_enum, Device.CPU if device == 'cpu' else Device.GPU)
+    return Variable(t, requires_grad=True) if requires_grad else Variable(t)
 
 def ones(shape, dtype='float32', device='cpu', requires_grad=False):
-    t = Tensor.ones(shape, getattr(DType, dtype.capitalize()), Device.CPU if device == 'cpu' else Device.GPU)
-    return Variable(t, requires_grad=True) if requires_grad else t
+    dt_enum = _to_dtype_enum(dtype)
+    t = Tensor.ones(shape, dt_enum, Device.CPU if device == 'cpu' else Device.GPU)
+    return Variable(t, requires_grad=True) if requires_grad else Variable(t)
 
 def arange(start, end, dtype='float32', device='cpu', requires_grad=False):
-    t = Tensor.arange(start, end, getattr(DType, dtype.capitalize()), Device.CPU if device == 'cpu' else Device.GPU)
-    return Variable(t, requires_grad=True) if requires_grad else t
+    dt_enum = _to_dtype_enum(dtype)
+    t = Tensor.arange(start, end, dt_enum, Device.CPU if device == 'cpu' else Device.GPU)
+    return Variable(t, requires_grad=True) if requires_grad else Variable(t)
 
 def stack(tensors, dim=0):
     """
@@ -313,7 +301,12 @@ def stack(tensors, dim=0):
     Returns:
         Tensor: The stacked tensor.
     """
-    return Tensor.stack(tensors, dim)
+    variables = [_ensure_variable(t) for t in tensors]
+    if not _should_build_graph(*variables):
+        tensor_data = [v.data for v in variables]
+        return Variable(Tensor.stack(tensor_data, dim))
+
+    return _stack(variables, dim)
 
 def mean(x):
     data = x.data if isinstance(x, Variable) else x
@@ -325,3 +318,11 @@ def max(x):
 
 # Overwrite the global sum with our new implementation
 sum = sum_op
+
+# --- Gradient Checkpointing ---
+
+def checkpoint(fn):
+    @functools.wraps(fn)
+    def checkpointed_fn(*args):
+        return _checkpoint(fn, list(args))
+    return checkpointed_fn

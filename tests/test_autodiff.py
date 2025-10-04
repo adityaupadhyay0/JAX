@@ -51,8 +51,8 @@ def test_no_grad():
     x = axe.array([3.0], requires_grad=True)
     with axe.no_grad():
         y = x * x
-    assert not isinstance(y, axe.Variable)
-    assert isinstance(y, axe.Tensor)
+        assert isinstance(y, axe.Variable)
+        assert not y.requires_grad
 
 def test_chain_rule():
     def f(x):

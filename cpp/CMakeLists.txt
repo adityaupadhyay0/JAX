@@ -14,7 +14,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(Eigen3)
 
-add_library(axe_core STATIC tensor.cpp variable.cpp op.cpp autodiff.cpp jit.cpp optimizer.cpp codegen.cpp dynamic_compiler.cpp jit_engine.cpp)
+add_library(axe_core STATIC tensor.cpp variable.cpp op.cpp autodiff.cpp jit.cpp optimizer.cpp codegen.cpp dynamic_compiler.cpp jit_engine.cpp allocator.cpp)
 target_include_directories(axe_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(axe_core PUBLIC Eigen3::Eigen)
 
@@ -33,7 +33,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(googletest)
 
-add_executable(run_cpp_tests tests/main.cpp tests/test_autodiff.cpp tests/test_advanced_optimizer.cpp tests/test_codegen.cpp)
+add_executable(run_cpp_tests tests/main.cpp tests/test_autodiff.cpp tests/test_advanced_optimizer.cpp tests/test_codegen.cpp tests/test_allocator.cpp)
 target_link_libraries(run_cpp_tests PRIVATE axe_core GTest::gtest_main dl)
 
 add_test(NAME CppTests COMMAND run_cpp_tests)
