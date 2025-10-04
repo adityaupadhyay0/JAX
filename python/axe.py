@@ -156,6 +156,57 @@ def jit(fn):
         return _jit.jit_execute_with_engine(graph, input_tensors)
     return jit_wrapper
 
+
+try:
+    from ._axe import _vmap_impl
+except ImportError:
+    _vmap_impl = None
+
+# --- Vectorization ---
+
+def vmap(fn=None, in_axes=0, out_axes=0):
+    """
+    Creates a function that maps `fn` over designated axes of the inputs.
+    This is a high-performance alternative to a Python for-loop.
+
+    Can be used as a decorator, e.g. `@vmap` or `@vmap(in_axes=...)`.
+
+    Args:
+        fn (Callable, optional): The function to be mapped. Defaults to None.
+        in_axes (int or tuple): Specifies the axis of the inputs to be mapped over.
+        out_axes (int): Specifies the axis of the outputs to be mapped over.
+
+    Returns:
+        Callable: A new function that maps `fn` over the specified axes.
+    """
+    def decorator(fn_):
+        @functools.wraps(fn_)
+        def vmapped_fn(*args):
+            if _jit.is_tracing():
+                raise NotImplementedError("jit(vmap(f)) is not supported. Try vmap(jit(f)) instead.")
+            if _vmap_impl is None:
+                raise NotImplementedError("vmap is not implemented in the C++ backend yet.")
+
+            # The actual logic is in the C++ backend for performance.
+            processed_args = []
+            for arg in args:
+                # Ensure that all inputs are Tensors or Variables for the C++ backend
+                if not isinstance(arg, (Tensor, Variable)):
+                    processed_args.append(array(arg))
+                else:
+                    processed_args.append(arg)
+
+            return _vmap_impl(fn_, tuple(processed_args), in_axes, out_axes)
+        return vmapped_fn
+
+    if fn is None:
+        # This is the case where it's called with arguments, like @vmap(in_axes=0)
+        return decorator
+    else:
+        # This is the case where it's called without arguments, like @vmap
+        return decorator(fn)
+
+
 # --- Gradient Tracking ---
 
 @contextlib.contextmanager
@@ -248,6 +299,21 @@ def ones(shape, dtype='float32', device='cpu', requires_grad=False):
 def arange(start, end, dtype='float32', device='cpu', requires_grad=False):
     t = Tensor.arange(start, end, getattr(DType, dtype.capitalize()), Device.CPU if device == 'cpu' else Device.GPU)
     return Variable(t, requires_grad=True) if requires_grad else t
+
+def stack(tensors, dim=0):
+    """
+    Concatenates a sequence of tensors along a new axis.
+    All tensors need to be of the same size.
+
+    Args:
+        tensors (sequence of Tensors): Tensors to stack.
+        dim (int): The axis in the result tensor along which the input
+                   tensors are stacked. Defaults to 0.
+
+    Returns:
+        Tensor: The stacked tensor.
+    """
+    return Tensor.stack(tensors, dim)
 
 def mean(x):
     data = x.data if isinstance(x, Variable) else x

@@ -41,6 +41,11 @@ public:
     Tensor mean() const;
     Tensor max() const;
     Tensor transpose() const;
+    Tensor reshape(const std::vector<size_t>& new_shape) const;
+
+    // Batching utilities for vmap
+    Tensor slice(size_t dim, size_t index) const;
+    static Tensor stack(const std::vector<Tensor>& tensors, size_t dim);
 
 private:
     std::vector<size_t> shape_;
