@@ -18,7 +18,7 @@ add_library(axe_core STATIC tensor.cpp variable.cpp op.cpp autodiff.cpp jit.cpp 
 target_include_directories(axe_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(axe_core PUBLIC Eigen3::Eigen)
 
-add_library(axe_pybind MODULE pybind.cpp)
+add_library(axe_pybind MODULE pybind.cpp vmap.cpp)
 target_link_libraries(axe_pybind PRIVATE axe_core pybind11::module dl)
 
 # This is important: it creates `_axe.so` which is what python/axe.py expects

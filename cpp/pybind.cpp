@@ -9,6 +9,7 @@
 #include "include/jit.h"
 #include "include/jit_engine.h"
 #include "include/exception.h"
+#include "include/vmap.h"
 
 namespace py = pybind11;
 using namespace axe;
@@ -51,6 +52,7 @@ PYBIND11_MODULE(_axe, m) {
         .def_static("zeros", &Tensor::zeros)
         .def_static("ones", &Tensor::ones)
         .def_static("arange", &Tensor::arange, py::arg("start"), py::arg("end"), py::arg("dtype"), py::arg("device") = Device::CPU)
+        .def_static("stack", &Tensor::stack, py::arg("tensors"), py::arg("dim") = 0)
         .def("__add__", &Tensor::add)
         .def("__sub__", &Tensor::sub)
         .def("__mul__", &Tensor::mul)
@@ -59,6 +61,9 @@ PYBIND11_MODULE(_axe, m) {
         .def("sum", &Tensor::sum)
         .def("mean", &Tensor::mean)
         .def("max", &Tensor::max)
+        .def("transpose", &Tensor::transpose)
+        .def("reshape", &Tensor::reshape, py::arg("new_shape"))
+        .def("slice", &Tensor::slice, py::arg("dim"), py::arg("index"))
         .def("numpy", [](Tensor& t) -> py::array {
             const auto& shape_size_t = t.shape();
             std::vector<py::ssize_t> shape(shape_size_t.begin(), shape_size_t.end());
@@ -136,6 +141,10 @@ PYBIND11_MODULE(_axe, m) {
 
     m.def("is_grad_enabled", []() { return axe::grad_enabled; });
     m.def("set_grad_enabled", [](bool enabled) { axe::grad_enabled = enabled; });
+
+    m.def("_vmap_impl", &axe::vmap_internal::vmap_impl,
+          py::arg("fn"), py::arg("args"), py::arg("in_axes"), py::arg("out_axes"),
+          "C++ implementation of vmap");
 
     auto jit_module = m.def_submodule("jit", "JIT compiler functionality");
     jit_module.def("is_tracing", [](){ return jit::is_tracing; });
