@@ -85,7 +85,16 @@ def _promote_operands(a, b):
 def add(a, b):
     va = _ensure_variable(a)
     vb = _ensure_variable(b)
-    va, vb = _promote_operands(va, vb)
+    if 'amp' in globals() and amp.autocast.is_enabled():
+        autocast_dtype_str = amp.autocast.get_autocast_dtype()
+        autocast_dtype = _to_dtype_enum(autocast_dtype_str)
+        if 'float' in str(va.data.dtype).lower() and va.data.dtype != autocast_dtype:
+             va = cast(va, autocast_dtype_str)
+        if 'float' in str(vb.data.dtype).lower() and vb.data.dtype != autocast_dtype:
+             vb = cast(vb, autocast_dtype_str)
+    else:
+        va, vb = _promote_operands(va, vb)
+
     if not _should_build_graph(va, vb):
         return Variable(_original_tensor_add(va.data, vb.data))
     file, line = _get_caller_location()
@@ -94,7 +103,16 @@ def add(a, b):
 def sub(a, b):
     va = _ensure_variable(a)
     vb = _ensure_variable(b)
-    va, vb = _promote_operands(va, vb)
+    if 'amp' in globals() and amp.autocast.is_enabled():
+        autocast_dtype_str = amp.autocast.get_autocast_dtype()
+        autocast_dtype = _to_dtype_enum(autocast_dtype_str)
+        if 'float' in str(va.data.dtype).lower() and va.data.dtype != autocast_dtype:
+             va = cast(va, autocast_dtype_str)
+        if 'float' in str(vb.data.dtype).lower() and vb.data.dtype != autocast_dtype:
+             vb = cast(vb, autocast_dtype_str)
+    else:
+        va, vb = _promote_operands(va, vb)
+
     if not _should_build_graph(va, vb):
         return Variable(_original_tensor_sub(va.data, vb.data))
     file, line = _get_caller_location()
@@ -103,7 +121,16 @@ def sub(a, b):
 def mul(a, b):
     va = _ensure_variable(a)
     vb = _ensure_variable(b)
-    va, vb = _promote_operands(va, vb)
+    if 'amp' in globals() and amp.autocast.is_enabled():
+        autocast_dtype_str = amp.autocast.get_autocast_dtype()
+        autocast_dtype = _to_dtype_enum(autocast_dtype_str)
+        if 'float' in str(va.data.dtype).lower() and va.data.dtype != autocast_dtype:
+             va = cast(va, autocast_dtype_str)
+        if 'float' in str(vb.data.dtype).lower() and vb.data.dtype != autocast_dtype:
+             vb = cast(vb, autocast_dtype_str)
+    else:
+        va, vb = _promote_operands(va, vb)
+
     if not _should_build_graph(va, vb):
         return Variable(_original_tensor_mul(va.data, vb.data))
     file, line = _get_caller_location()

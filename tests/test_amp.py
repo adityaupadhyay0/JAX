@@ -53,9 +53,9 @@ def test_amp_end_to_end():
 
         with axe.amp.autocast():
             y_pred = model(x)
-            # loss must be float32
-            loss = axe.mean((y_pred.cast('float32') - y_true) ** 2)
 
+        # loss must be float32, calculated outside autocast
+        loss = axe.mean((y_pred.cast('float32') - y_true) ** 2)
         scaled_loss = scaler.scale(loss)
         scaled_loss.backward()
         scaler.step(optimizer)
@@ -65,3 +65,51 @@ def test_amp_end_to_end():
         p_np = np.array(p.data)
         initial_p_np = np.array(initial_params[i])
         assert not np.allclose(p_np, initial_p_np)
+
+
+class DecoratedModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear1 = nn.Linear(10, 20)
+        self.linear2 = nn.Linear(20, 1)
+
+    @axe.amp
+    def forward(self, x):
+        # linear1 and linear2 will be autocasted due to the decorator
+        x = self.linear1(x)
+        x = self.linear2(x)
+        return x
+
+def test_amp_decorator():
+    """
+    Tests the @axe.amp decorator for end-to-end mixed-precision training.
+    """
+    model = DecoratedModel()
+    optimizer = optim.Adam(model.parameters(), lr=0.01)
+    # Use a smaller initial scale to prevent overflow in this simple test case
+    scaler = axe.amp.GradScaler(init_scale=1024.0)
+
+    # Get initial parameter values to check for updates
+    initial_params = [np.array(p.data) for p in model.parameters()]
+
+    x = axe.randn(4, 10)
+    y_true = axe.randn(4, 1)
+
+    optimizer.zero_grad()
+
+    # The forward pass is wrapped by the decorator, so it's autocasted
+    y_pred = model(x)
+    assert y_pred.dtype == axe.DType.Float16, "Output of decorated function should be float16"
+
+    # Loss must be float32 for stability
+    loss = axe.mean((y_pred.cast('float32') - y_true) ** 2)
+
+    # Scale loss, backpropagate, and update weights
+    scaled_loss = scaler.scale(loss)
+    scaled_loss.backward()
+    scaler.step(optimizer)
+
+    # Check that the parameters have been updated
+    updated_params = [np.array(p.data) for p in model.parameters()]
+    for i, p_init in enumerate(initial_params):
+        assert not np.allclose(p_init, updated_params[i]), f"Parameter {i} was not updated."

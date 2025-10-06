@@ -25,7 +25,7 @@ class Linear(Module):
         else:
             self.bias = None
 
-    def __call__(self, x):
+    def forward(self, x):
         output = matmul(x, self.weight)
         if self.bias is not None:
             output = add(output, self.bias)

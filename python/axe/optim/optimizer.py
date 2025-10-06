@@ -1,20 +1,28 @@
-from ..nn import Module
+from .. import Variable
 
 class Optimizer:
     """
     Base class for all optimizers.
     """
 
-    def __init__(self, module: Module):
+    def __init__(self, params):
         """
         Initializes the optimizer.
 
         Args:
-            module: The `Module` whose parameters should be optimized.
+            params: An iterable of `Variable`s to optimize. This can be a generator
+                    or a list.
         """
-        if not isinstance(module, Module):
-            raise TypeError(f"Optimizer expects a Module instance, but got {type(module)}")
-        self.module = module
+        # Convert generator to list to be able to iterate multiple times
+        param_list = list(params)
+
+        if not param_list:
+            raise ValueError("Optimizer received an empty parameter list.")
+        if not all(isinstance(p, Variable) for p in param_list):
+            raise TypeError("Optimizer was passed an iterable that does not contain only Variables.")
+
+        # The main parameter group
+        self.param_groups = [{'params': param_list}]
 
     def step(self):
         """
@@ -27,6 +35,7 @@ class Optimizer:
         """
         Clears the gradients of all optimized `Variable`s.
         """
-        for p in self.module.parameters():
-            if p.grad is not None:
-                p.grad = None
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is not None:
+                    p.grad = None

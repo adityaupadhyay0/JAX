@@ -22,12 +22,18 @@ class Module:
             self._modules[name] = value
         object.__setattr__(self, name, value)
 
-    def __call__(self, *args, **kwargs):
+    def forward(self, *args, **kwargs):
         """
         Defines the forward pass of the module.
         Subclasses should override this method.
         """
-        raise NotImplementedError
+        raise NotImplementedError(f"Module '{type(self).__name__}' has no forward method implemented.")
+
+    def __call__(self, *args, **kwargs):
+        """
+        Calls the forward method of the module.
+        """
+        return self.forward(*args, **kwargs)
 
     def parameters(self):
         """

@@ -1,39 +1,40 @@
 from .optimizer import Optimizer
 from .. import no_grad, mul, array, sub
-from ..nn import Module
 
 class SGD(Optimizer):
     """
-    Implements stochastic gradient descent (optionally with momentum).
+    Implements stochastic gradient descent.
     """
 
-    def __init__(self, module: Module, lr: float):
+    def __init__(self, params, lr: float):
         """
         Initializes the SGD optimizer.
 
         Args:
-            module: The `Module` whose parameters should be optimized.
+            params: An iterable of `Variable`s to optimize.
             lr (float): The learning rate.
         """
-        super().__init__(module)
-        self.lr = lr
+        if lr < 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        super().__init__(params)
+        # Add lr to the param_groups
+        for group in self.param_groups:
+            group['lr'] = lr
 
-    def step(self, scaler=None):
+    def step(self):
         """
         Performs a single optimization step.
         """
         with no_grad():
-            for p in self.module.parameters():
-                if p.grad is not None:
-                    grad = p.grad
-                    if scaler:
-                        inv_scale = array(1.0) / scaler.get_scale()
-                        grad = mul(grad, inv_scale).data
-
-                    update = mul(array(self.lr), grad)
-                    new_p = sub(p, update)
-                    p.data = new_p.data
-                    p.grad = None
+            for group in self.param_groups:
+                lr = group['lr']
+                for p in group['params']:
+                    if p.grad is not None:
+                        grad = p.grad
+                        update = mul(array(lr), grad)
+                        new_p = sub(p, update)
+                        p.data = new_p.data
+                        # We don't nullify grad here, zero_grad() is responsible for that
 
     def __repr__(self):
-        return f"SGD(lr={self.lr})"
+        return f"SGD(lr={self.param_groups[0]['lr']})"

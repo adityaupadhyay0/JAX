@@ -1,5 +1,5 @@
 from .module import Module
-from .. import ones, zeros, var, mean, sqrt, array, no_grad
+from .. import ones, zeros, var, mean, sqrt, array, no_grad, add, mul
 
 class BatchNorm2d(Module):
     """
@@ -11,9 +11,9 @@ class BatchNorm2d(Module):
         self.eps = eps
         self.momentum = momentum
 
-        # Learnable parameters
-        self.weight = ones(num_features) # gamma
-        self.bias = zeros(num_features)   # beta
+        # Learnable parameters, shaped for broadcasting
+        self.weight = ones((1, num_features, 1, 1)) # gamma
+        self.bias = zeros((1, num_features, 1, 1))   # beta
         self.weight.requires_grad = True
         self.bias.requires_grad = True
 
@@ -21,7 +21,7 @@ class BatchNorm2d(Module):
         self.running_mean = zeros(num_features)
         self.running_var = ones(num_features)
 
-    def __call__(self, x):
+    def forward(self, x):
         if self.training:
             # Calculate batch statistics
             # Mean and Var are calculated over N, H, W, for each C
@@ -46,11 +46,8 @@ class BatchNorm2d(Module):
             # Use running statistics for normalization
             x_hat = (x - running_mean_reshaped) / sqrt(running_var_reshaped + array(self.eps))
 
-        # Scale and shift
-        # Reshape weight and bias to (1, C, 1, 1) for broadcasting
-        weight = self.weight.reshape((1, self.num_features, 1, 1))
-        bias = self.bias.reshape((1, self.num_features, 1, 1))
-        return weight * x_hat + bias
+        # Scale and shift using broadcast-ready parameters
+        return mul(self.weight, x_hat) + self.bias
 
     def __repr__(self):
         return f"BatchNorm2d(num_features={self.num_features}, eps={self.eps}, momentum={self.momentum})"

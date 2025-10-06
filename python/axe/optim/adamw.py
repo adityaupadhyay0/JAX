@@ -1,83 +1,93 @@
 from .optimizer import Optimizer
 from .. import no_grad, zeros, add, sub, mul, array, sqrt, truediv
-from ..nn import Module
 
 class AdamW(Optimizer):
     """
     Implements the AdamW algorithm.
     """
 
-    def __init__(self, module: Module, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-2):
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-2):
         """
         Initializes the AdamW optimizer.
         Args:
-            module: The `Module` whose parameters should be optimized.
+            params: An iterable of `Variable`s to optimize.
             lr (float): The learning rate.
             betas (Tuple[float, float]): Coefficients used for computing running averages of gradient and its square.
             eps (float): Term added to the denominator to improve numerical stability.
             weight_decay (float): Weight decay coefficient.
         """
-        super().__init__(module)
-        self.lr = lr
-        self.beta1, self.beta2 = betas
-        self.eps = eps
-        self.weight_decay = weight_decay
-        self.t = 0
-        self.m = {} # Use dict for state
-        self.v = {} # Use dict for state
+        if not 0.0 <= lr:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if not 0.0 <= eps:
+            raise ValueError(f"Invalid epsilon value: {eps}")
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError(f"Invalid beta parameter at index 0: {betas[0]}")
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid beta parameter at index 1: {betas[1]}")
+        if not 0.0 <= weight_decay:
+            raise ValueError(f"Invalid weight_decay value: {weight_decay}")
 
-    def step(self, scaler=None):
+        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+        super().__init__(params)
+        for group in self.param_groups:
+            group.update(defaults)
+
+        self.state = {}
+
+    def step(self):
         """
         Performs a single optimization step.
         """
-        self.t += 1
-
-        # Prune state for parameters that are no longer in the model
-        current_param_ids = {id(p) for p in self.module.parameters()}
-        for param_id in list(self.m.keys()):
-            if param_id not in current_param_ids:
-                del self.m[param_id]
-                del self.v[param_id]
-
         with no_grad():
-            for p in self.module.parameters():
-                if p.grad is None:
-                    continue
+            for group in self.param_groups:
+                lr = group['lr']
+                beta1, beta2 = group['betas']
+                eps = group['eps']
+                weight_decay = group['weight_decay']
 
-                param_id = id(p)
+                for p in group['params']:
+                    if p.grad is None:
+                        continue
 
-                # Initialize state for new parameters
-                if param_id not in self.m:
-                    self.m[param_id] = zeros(p.shape, requires_grad=False)
-                    self.v[param_id] = zeros(p.shape, requires_grad=False)
+                    # Decoupled weight decay
+                    if weight_decay != 0:
+                        p.data = sub(p, mul(array(lr * weight_decay), p)).data
 
-                grad = p.grad
-                if scaler:
-                    inv_scale = array(1.0) / scaler.get_scale()
-                    grad = mul(grad, inv_scale).data
+                    param_id = id(p)
+                    if param_id not in self.state:
+                        self.state[param_id] = {
+                            'step': 0,
+                            'exp_avg': zeros(p.shape, requires_grad=False),
+                            'exp_avg_sq': zeros(p.shape, requires_grad=False)
+                        }
 
-                # Decoupled weight decay
-                p.data = sub(p, mul(array(self.lr * self.weight_decay), p)).data
+                    state = self.state[param_id]
+                    state['step'] += 1
 
-                # Update biased first moment estimate
-                self.m[param_id] = add(mul(array(self.beta1), self.m[param_id]), mul(array(1 - self.beta1), grad))
+                    grad = p.grad
+                    exp_avg = state['exp_avg']
+                    exp_avg_sq = state['exp_avg_sq']
 
-                # Update biased second raw moment estimate
-                grad_sq = mul(grad, grad)
-                self.v[param_id] = add(mul(array(self.beta2), self.v[param_id]), mul(array(1 - self.beta2), grad_sq))
+                    # Update biased first moment estimate
+                    exp_avg.data = add(mul(array(beta1), exp_avg), mul(array(1 - beta1), grad)).data
 
-                # Compute bias-corrected first moment estimate
-                m_hat = truediv(self.m[param_id], array(1 - self.beta1 ** self.t))
+                    # Update biased second raw moment estimate
+                    grad_sq = mul(grad, grad)
+                    exp_avg_sq.data = add(mul(array(beta2), exp_avg_sq), mul(array(1 - beta2), grad_sq)).data
 
-                # Compute bias-corrected second raw moment estimate
-                v_hat = truediv(self.v[param_id], array(1 - self.beta2 ** self.t))
+                    # Compute bias-corrected first moment estimate
+                    bias_correction1 = 1 - beta1 ** state['step']
+                    m_hat = truediv(exp_avg, array(bias_correction1))
 
-                # Update parameters
-                update_val = truediv(mul(array(self.lr), m_hat), add(sqrt(v_hat), array(self.eps)))
+                    # Compute bias-corrected second raw moment estimate
+                    bias_correction2 = 1 - beta2 ** state['step']
+                    v_hat = truediv(exp_avg_sq, array(bias_correction2))
 
-                new_p = sub(p, update_val)
-                p.data = new_p.data
-                p.grad = None
+                    # Update parameters
+                    update_val = truediv(mul(array(lr), m_hat), add(sqrt(v_hat), array(eps)))
+
+                    p.data = sub(p, update_val).data
 
     def __repr__(self):
-        return f"AdamW(lr={self.lr}, betas=({self.beta1}, {self.beta2}), eps={self.eps}, weight_decay={self.weight_decay})"
+        group = self.param_groups[0]
+        return f"AdamW(lr={group['lr']}, betas=({group['betas'][0]}, {group['betas'][1]}), eps={group['eps']}, weight_decay={group['weight_decay']})"
