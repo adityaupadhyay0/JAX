@@ -3,13 +3,14 @@
 #include <memory>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include "allocator.h"
 
 namespace axe {
 
 enum class Device { CPU, GPU };
 
-enum class DType { Float32, Float64, Int32, Int64 };
+enum class DType { Float16, Float32, Float64, Int32, Int64 };
 
 class Tensor {
 public:
@@ -36,13 +37,19 @@ public:
     Tensor sub(const Tensor& other) const;
     Tensor mul(const Tensor& other) const;
     Tensor div(const Tensor& other) const;
+    Tensor exp() const;
+    Tensor sqrt() const;
     Tensor matmul(const Tensor& other) const;
+    Tensor bmm(const Tensor& other) const;
+    Tensor conv2d(const Tensor& weight, const std::optional<Tensor>& bias, int stride, int padding) const;
 
-    Tensor sum() const;
-    Tensor mean() const;
-    Tensor max() const;
-    Tensor transpose() const;
+    Tensor sum(const std::optional<std::vector<int>>& axis = std::nullopt, bool keepdims = false) const;
+    Tensor mean(const std::optional<std::vector<int>>& axis = std::nullopt, bool keepdims = false) const;
+    Tensor var(const std::optional<std::vector<int>>& axis = std::nullopt, bool keepdims = false) const;
+    Tensor max(const std::optional<std::vector<int>>& axis = std::nullopt, bool keepdims = false) const;
+    Tensor transpose(int dim0, int dim1) const;
     Tensor reshape(const std::vector<size_t>& new_shape) const;
+    Tensor cast(DType new_dtype) const;
 
     // Batching utilities for vmap
     Tensor slice(size_t dim, size_t index) const;

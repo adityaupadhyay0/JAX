@@ -88,6 +88,7 @@ PYBIND11_MODULE(_axe, m) {
         .value("CPU", Device::CPU)
         .value("GPU", Device::GPU);
     py::enum_<DType>(m, "DType")
+        .value("Float16", DType::Float16)
         .value("Float32", DType::Float32)
         .value("Float64", DType::Float64)
         .value("Int32", DType::Int32)
@@ -124,12 +125,16 @@ PYBIND11_MODULE(_axe, m) {
         .def("__sub__", &Tensor::sub)
         .def("__mul__", &Tensor::mul)
         .def("__truediv__", &Tensor::div)
+        .def("exp", &Tensor::exp)
+        .def("sqrt", &Tensor::sqrt)
         .def("__matmul__", &Tensor::matmul)
-        .def("sum", &Tensor::sum)
-        .def("mean", &Tensor::mean)
+        .def("sum", (Tensor (Tensor::*)(const std::optional<std::vector<int>>&, bool) const) &Tensor::sum, py::arg("axis") = std::nullopt, py::arg("keepdims") = false)
+        .def("mean", (Tensor (Tensor::*)(const std::optional<std::vector<int>>&, bool) const) &Tensor::mean, py::arg("axis") = std::nullopt, py::arg("keepdims") = false)
+        .def("var", (Tensor (Tensor::*)(const std::optional<std::vector<int>>&, bool) const) &Tensor::var, py::arg("axis") = std::nullopt, py::arg("keepdims") = false)
         .def("max", &Tensor::max)
         .def("transpose", &Tensor::transpose)
         .def("reshape", &Tensor::reshape, py::arg("new_shape"))
+        .def("cast", &Tensor::cast, py::arg("new_dtype"))
         .def("slice", &Tensor::slice, py::arg("dim"), py::arg("index"))
         .def("numpy", [](Tensor& t) -> py::array {
             const auto& shape_size_t = t.shape();
@@ -170,8 +175,11 @@ PYBIND11_MODULE(_axe, m) {
         .def("reshape", [](const Variable& v, const std::vector<size_t>& new_shape) {
             return Variable(v.data.reshape(new_shape));
          })
-        .def("transpose", [](const Variable& v) {
-            return Variable(v.data.transpose());
+        .def("transpose", [](const Variable& v, int dim0, int dim1) {
+            return transpose(std::make_shared<Variable>(v), dim0, dim1);
+        })
+        .def("bmm", [](const Variable& v, const Variable& other) {
+            return bmm(std::make_shared<Variable>(v), std::make_shared<Variable>(other));
         })
         .def("slice", [](const Variable& v, size_t dim, size_t index) {
             return Variable(v.data.slice(dim, index));
@@ -225,7 +233,12 @@ PYBIND11_MODULE(_axe, m) {
     m.def("_sub", &sub, py::arg("a"), py::arg("b"), py::arg("file") = "", py::arg("line") = 0);
     m.def("_mul", &mul, py::arg("a"), py::arg("b"), py::arg("file") = "", py::arg("line") = 0);
     m.def("_matmul", &matmul, py::arg("a"), py::arg("b"), py::arg("file") = "", py::arg("line") = 0);
-    m.def("_sum", &sum, py::arg("a"), py::arg("file") = "", py::arg("line") = 0);
+    m.def("_conv2d", &conv2d, py::arg("a"), py::arg("weight"), py::arg("bias"), py::arg("stride"), py::arg("padding"), py::arg("file") = "", py::arg("line") = 0);
+    m.def("_sum", &sum, py::arg("a"), py::arg("axis") = std::nullopt, py::arg("keepdims") = false, py::arg("file") = "", py::arg("line") = 0);
+    m.def("_sqrt", (std::shared_ptr<Variable> (*)(std::shared_ptr<Variable>, const std::string&, int)) &sqrt, py::arg("a"), py::arg("file") = "", py::arg("line") = 0);
+    m.def("_cast", &cast, py::arg("a"), py::arg("new_dtype"), py::arg("file") = "", py::arg("line") = 0);
+    m.def("_exp", (std::shared_ptr<Variable> (*)(std::shared_ptr<Variable>, const std::string&, int)) &exp, py::arg("a"), py::arg("file") = "", py::arg("line") = 0);
+    m.def("_mean", (std::shared_ptr<Variable> (*)(std::shared_ptr<Variable>, const std::optional<std::vector<int>>&, bool, const std::string&, int)) &mean, py::arg("a"), py::arg("axis") = std::nullopt, py::arg("keepdims") = false, py::arg("file") = "", py::arg("line") = 0);
     m.def("_stack", &stack, py::arg("inputs"), py::arg("dim") = 0, "Create a stack operation.");
 
     m.def("_checkpoint", &checkpoint, py::arg("fn"), py::arg("inputs"), "Create a gradient checkpoint.");
@@ -362,6 +375,7 @@ PYBIND11_MODULE(_axe, m) {
 
 std::string format_descriptor(DType dtype) {
     switch (dtype) {
+        case DType::Float16: return "e";
         case DType::Float32: return py::format_descriptor<float>::format();
         case DType::Float64: return py::format_descriptor<double>::format();
         case DType::Int32:   return py::format_descriptor<int32_t>::format();
@@ -372,6 +386,7 @@ std::string format_descriptor(DType dtype) {
 
 size_t dtype_size(DType dtype) {
     switch (dtype) {
+        case DType::Float16: return 2;
         case DType::Float32: return sizeof(float);
         case DType::Float64: return sizeof(double);
         case DType::Int32:   return sizeof(int32_t);
