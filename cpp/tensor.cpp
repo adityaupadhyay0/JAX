@@ -4,15 +4,18 @@
 #include <cstring>
 #include <stdexcept>
 #include <numeric>
+#include <cmath>
 #include <sstream>
 #include <functional>
 #include <Eigen/Dense>
+#include <unsupported/Eigen/CXX11/Tensor>
 
 namespace axe {
 
 // Helper to get size of a DType in bytes
 size_t dtype_size(DType dtype) {
     switch (dtype) {
+        case DType::Float16: return 2;
         case DType::Float32: return 4;
         case DType::Float64: return 8;
         case DType::Int32:   return 4;
@@ -85,6 +88,13 @@ Tensor Tensor::ones(const std::vector<size_t>& shape, DType dtype, Device device
     size_t n = t.nelement();
 
     switch(dtype) {
+        case DType::Float16: {
+            // Eigen::half doesn't have a direct literal, use float and cast
+            Eigen::half one_h = static_cast<Eigen::half>(1.0f);
+            Eigen::half* ptr = static_cast<Eigen::half*>(t.data());
+            for (size_t i = 0; i < n; ++i) ptr[i] = one_h;
+            break;
+        }
         case DType::Float32: {
             float* ptr = static_cast<float*>(t.data());
             for (size_t i = 0; i < n; ++i) ptr[i] = 1.0f;
@@ -113,6 +123,11 @@ Tensor Tensor::arange(size_t start, size_t end, DType dtype, Device device) {
     size_t n = end > start ? end - start : 0;
     Tensor t({n}, dtype, device);
     switch(dtype) {
+        case DType::Float16: {
+            Eigen::half* ptr = static_cast<Eigen::half*>(t.data());
+            for (size_t i = 0; i < n; ++i) ptr[i] = static_cast<Eigen::half>(start + i);
+            break;
+        }
         case DType::Float32: {
             float* ptr = static_cast<float*>(t.data());
             for (size_t i = 0; i < n; ++i) ptr[i] = static_cast<float>(start + i);
@@ -172,6 +187,47 @@ std::vector<size_t> calculate_broadcast_shape(const std::vector<size_t>& a_shape
 
 
 template<typename T>
+Tensor unary_op(const Tensor& a, std::function<T(T)> op) {
+    Tensor result(a.shape(), a.dtype(), a.device());
+    const T* a_ptr = static_cast<const T*>(a.data());
+    T* res_ptr = static_cast<T*>(result.data());
+    size_t n = a.nelement();
+    for (size_t i = 0; i < n; ++i) {
+        res_ptr[i] = op(a_ptr[i]);
+    }
+    return result;
+}
+
+Tensor Tensor::bmm(const Tensor& other) const {
+    if (shape_.size() != 3 || other.shape().size() != 3) {
+        throw AxeException("bmm expects 3D tensors");
+    }
+    if (shape_[0] != other.shape()[0]) {
+        throw AxeException("bmm inputs must have the same batch size");
+    }
+    if (shape_[2] != other.shape()[1]) {
+        throw AxeException("Incompatible dimensions for bmm");
+    }
+
+    size_t batch_size = shape_[0];
+    size_t M = shape_[1];
+    size_t K = shape_[2];
+    size_t N = other.shape()[2];
+
+    std::vector<size_t> result_shape = {batch_size, M, N};
+    Tensor result(result_shape, dtype_, device_);
+
+    for (size_t i = 0; i < batch_size; ++i) {
+        Tensor a_slice = this->slice(0, i);
+        Tensor b_slice = other.slice(0, i);
+        Tensor result_slice = a_slice.matmul(b_slice);
+        result.add_from_slice(result_slice, 0, i);
+    }
+
+    return result;
+}
+
+template<typename T>
 Tensor broadcast_op(const Tensor& a, const Tensor& b, std::function<T(T, T)> op) {
     if (a.dtype() != b.dtype()) {
         throw std::runtime_error("Mismatched dtypes for element-wise op");
@@ -228,34 +284,52 @@ Tensor broadcast_op(const Tensor& a, const Tensor& b, std::function<T(T, T)> op)
     return result;
 }
 
-template<typename T>
-void transpose_impl(const Tensor& a, Tensor& result) {
-    using ConstEigenMap = Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>;
-    using EigenMap = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>;
+Tensor Tensor::transpose(int dim0, int dim1) const {
+    int rank = shape_.size();
+    if (dim0 < 0) dim0 += rank;
+    if (dim1 < 0) dim1 += rank;
 
-    ConstEigenMap eigen_a(static_cast<const T*>(a.data()), a.shape()[0], a.shape()[1]);
-    EigenMap eigen_result(static_cast<T*>(result.data()), result.shape()[0], result.shape()[1]);
-
-    eigen_result = eigen_a.transpose();
-}
-
-Tensor Tensor::transpose() const {
-    if (shape_.size() != 2) {
-        throw std::runtime_error("transpose expects a 2D tensor");
+    if (dim0 < 0 || dim0 >= rank || dim1 < 0 || dim1 >= rank) {
+        throw AxeException("transpose(): dimension out of range");
     }
 
-    std::vector<size_t> result_shape = {shape_[1], shape_[0]};
-    Tensor result(result_shape, dtype_, device_);
+    if (dim0 == dim1) {
+        return *this;
+    }
+
+    std::vector<size_t> new_shape = shape_;
+    std::swap(new_shape[dim0], new_shape[dim1]);
+
+    Tensor result(new_shape, dtype_, device_);
+
+    auto transpose_by_output_iteration = [&](auto* in_data, auto* out_data) {
+        std::vector<size_t> in_strides = calculate_strides(shape_);
+        std::vector<size_t> out_idx(rank, 0);
+
+        for(size_t i = 0; i < nelement(); ++i) {
+            std::vector<size_t> in_idx = out_idx;
+            std::swap(in_idx[dim0], in_idx[dim1]);
+
+            size_t in_offset = 0;
+            for(int d = 0; d < rank; ++d) {
+                in_offset += in_idx[d] * in_strides[d];
+            }
+            out_data[i] = in_data[in_offset];
+
+            for (int d = rank - 1; d >= 0; --d) {
+                if (++out_idx[d] < new_shape[d]) break;
+                out_idx[d] = 0;
+            }
+        }
+    };
 
     switch (dtype_) {
-        case DType::Float32:
-            transpose_impl<float>(*this, result);
-            break;
-        case DType::Float64:
-            transpose_impl<double>(*this, result);
-            break;
-        default:
-            throw std::runtime_error("Unsupported dtype for transpose. Only Float32 and Float64 are supported.");
+        case DType::Float16: transpose_by_output_iteration(static_cast<const Eigen::half*>(data()), static_cast<Eigen::half*>(result.data())); break;
+        case DType::Float32: transpose_by_output_iteration(static_cast<const float*>(data()), static_cast<float*>(result.data())); break;
+        case DType::Float64: transpose_by_output_iteration(static_cast<const double*>(data()), static_cast<double*>(result.data())); break;
+        case DType::Int32: transpose_by_output_iteration(static_cast<const int32_t*>(data()), static_cast<int32_t*>(result.data())); break;
+        case DType::Int64: transpose_by_output_iteration(static_cast<const int64_t*>(data()), static_cast<int64_t*>(result.data())); break;
+        default: throw std::runtime_error("Unsupported dtype for transpose");
     }
 
     return result;
@@ -263,6 +337,7 @@ Tensor Tensor::transpose() const {
 
 #define DISPATCH_DTYPE_BCAST(op_name, op) \
     switch (this->dtype()) { \
+        case DType::Float16: return broadcast_op<Eigen::half>(*this, other, op<Eigen::half>); \
         case DType::Float32: return broadcast_op<float>(*this, other, op<float>); \
         case DType::Float64: return broadcast_op<double>(*this, other, op<double>); \
         case DType::Int32: return broadcast_op<int32_t>(*this, other, op<int32_t>); \
@@ -288,6 +363,24 @@ Tensor Tensor::mul(const Tensor& other) const {
 template<typename T> T div_op(T a, T b) { return a / b; }
 Tensor Tensor::div(const Tensor& other) const {
     DISPATCH_DTYPE_BCAST("div", div_op);
+}
+
+#define DISPATCH_DTYPE_UNARY(op_name, op) \
+    switch (this->dtype()) { \
+        case DType::Float16: return unary_op<Eigen::half>(*this, op<Eigen::half>); \
+        case DType::Float32: return unary_op<float>(*this, op<float>); \
+        case DType::Float64: return unary_op<double>(*this, op<double>); \
+        default: throw std::runtime_error("Unsupported dtype for " #op_name ". Only floating point types are supported."); \
+    }
+
+template<typename T> T sqrt_op(T a) { return static_cast<T>(std::sqrt(a)); }
+Tensor Tensor::sqrt() const {
+    DISPATCH_DTYPE_UNARY("sqrt", sqrt_op);
+}
+
+template<typename T> T exp_op(T a) { return static_cast<T>(std::exp(a)); }
+Tensor Tensor::exp() const {
+    DISPATCH_DTYPE_UNARY("exp", exp_op);
 }
 
 // Matrix-Matrix multiplication
@@ -339,9 +432,10 @@ Tensor Tensor::matmul(const Tensor& other) const {
         std::vector<size_t> result_shape = {shape_[0]};
         Tensor result(result_shape, dtype_, device_);
         switch (dtype_) {
+            case DType::Float16: matmul_vec_impl<Eigen::half>(*this, other, result); break;
             case DType::Float32: matmul_vec_impl<float>(*this, other, result); break;
             case DType::Float64: matmul_vec_impl<double>(*this, other, result); break;
-            default: throw AxeException("Unsupported dtype for matmul. Only Float32 and Float64 are supported.");
+            default: throw AxeException("Unsupported dtype for matmul. Only Float16, Float32, and Float64 are supported.");
         }
         return result;
     }
@@ -366,6 +460,9 @@ Tensor Tensor::matmul(const Tensor& other) const {
     Tensor result(result_shape, dtype_, device_);
 
     switch (dtype_) {
+        case DType::Float16:
+            matmul_mat_impl<Eigen::half>(*this, other, result);
+            break;
         case DType::Float32:
             matmul_mat_impl<float>(*this, other, result);
             break;
@@ -373,10 +470,74 @@ Tensor Tensor::matmul(const Tensor& other) const {
             matmul_mat_impl<double>(*this, other, result);
             break;
         default:
-            throw AxeException("Unsupported dtype for matmul. Only Float32 and Float64 are supported.");
+            throw AxeException("Unsupported dtype for matmul. Only Float16, Float32, and Float64 are supported.");
     }
 
     return result;
+}
+
+Tensor Tensor::conv2d(const Tensor& weight, const std::optional<Tensor>& bias, int stride, int padding) const {
+    // Basic shape validations
+    if (shape_.size() != 4 || weight.shape().size() != 4) {
+        throw AxeException("conv2d requires 4D input and weight tensors (N, C, H, W).");
+    }
+    if (shape_[1] != weight.shape()[1]) {
+        throw AxeException("Input channels must match the number of input channels in the weight tensor.");
+    }
+    if (bias && (bias->shape().size() != 1 || bias->shape()[0] != weight.shape()[0])) {
+        throw AxeException("Bias shape must be (C_out), matching the number of output channels in the weight tensor.");
+    }
+
+    const size_t N = shape_[0];
+    const size_t C_in = shape_[1];
+    const size_t H_in = shape_[2];
+    const size_t W_in = shape_[3];
+
+    const size_t C_out = weight.shape()[0];
+    const size_t K_h = weight.shape()[2];
+    const size_t K_w = weight.shape()[3];
+
+    const size_t H_out = (H_in + 2 * padding - K_h) / stride + 1;
+    const size_t W_out = (W_in + 2 * padding - K_w) / stride + 1;
+
+    std::vector<size_t> output_shape = {N, C_out, H_out, W_out};
+    Tensor output = Tensor::zeros(output_shape, dtype_, device_);
+
+    const float* input_data = static_cast<const float*>(data_);
+    const float* weight_data = static_cast<const float*>(weight.data());
+    const float* bias_data = bias ? static_cast<const float*>(bias->data()) : nullptr;
+    float* output_data = static_cast<float*>(output.data());
+
+    for (size_t n = 0; n < N; ++n) {
+        for (size_t c_out = 0; c_out < C_out; ++c_out) {
+            for (size_t h_out = 0; h_out < H_out; ++h_out) {
+                for (size_t w_out = 0; w_out < W_out; ++w_out) {
+                    float acc = 0.0f;
+                    for (size_t c_in = 0; c_in < C_in; ++c_in) {
+                        for (size_t kh = 0; kh < K_h; ++kh) {
+                            for (size_t kw = 0; kw < K_w; ++kw) {
+                                long h_in_pos = (long)h_out * stride - padding + kh;
+                                long w_in_pos = (long)w_out * stride - padding + kw;
+
+                                if (h_in_pos >= 0 && h_in_pos < (long)H_in && w_in_pos >= 0 && w_in_pos < (long)W_in) {
+                                    size_t input_idx = n * C_in * H_in * W_in + c_in * H_in * W_in + h_in_pos * W_in + w_in_pos;
+                                    size_t weight_idx = c_out * C_in * K_h * K_w + c_in * K_h * K_w + kh * K_w + kw;
+                                    acc += input_data[input_idx] * weight_data[weight_idx];
+                                }
+                            }
+                        }
+                    }
+                    size_t output_idx = n * C_out * H_out * W_out + c_out * H_out * W_out + h_out * W_out + w_out;
+                    if (bias_data) {
+                        acc += bias_data[c_out];
+                    }
+                    output_data[output_idx] = acc;
+                }
+            }
+        }
+    }
+
+    return output;
 }
 
 void Tensor::add_from_slice(const Tensor& source, size_t dim, size_t index) {
@@ -414,6 +575,36 @@ void Tensor::add_from_slice(const Tensor& source, size_t dim, size_t index) {
     }
 }
 
+template <typename From, typename To>
+void cast_data(const void* from_data, void* to_data, size_t n) {
+    const From* from_ptr = static_cast<const From*>(from_data);
+    To* to_ptr = static_cast<To*>(to_data);
+    std::transform(from_ptr, from_ptr + n, to_ptr, [](From val) {
+        return static_cast<To>(val);
+    });
+}
+
+axe::Tensor axe::Tensor::cast(DType new_dtype) const {
+    if (new_dtype == dtype_) {
+        return *this;
+    }
+
+    Tensor result(shape_, new_dtype, device_);
+    size_t n = nelement();
+
+    // This is a simplified version. A full implementation would handle all type combinations.
+    // For now, we focus on float32 <-> float16
+    if (dtype_ == DType::Float32 && new_dtype == DType::Float16) {
+        cast_data<float, Eigen::half>(data_, result.data(), n);
+    } else if (dtype_ == DType::Float16 && new_dtype == DType::Float32) {
+        cast_data<Eigen::half, float>(data_, result.data(), n);
+    } else {
+        throw std::runtime_error("Unsupported cast");
+    }
+
+    return result;
+}
+
 } // namespace axe
 template<typename T>
 T reduce(const T* data, size_t n, T initial_value, std::function<T(T, T)> op) {
@@ -424,24 +615,93 @@ T reduce(const T* data, size_t n, T initial_value, std::function<T(T, T)> op) {
     return accum;
 }
 
-axe::Tensor axe::Tensor::sum() const {
-    Tensor result({}, dtype_, device_);
-    switch (dtype_) {
-        case DType::Float32:
-            *static_cast<float*>(result.data()) = reduce<float>(static_cast<const float*>(data()), nelement(), 0.0f, std::plus<float>());
-            break;
-        case DType::Float64:
-            *static_cast<double*>(result.data()) = reduce<double>(static_cast<const double*>(data()), nelement(), 0.0, std::plus<double>());
-            break;
-        case DType::Int32:
-            *static_cast<int32_t*>(result.data()) = reduce<int32_t>(static_cast<const int32_t*>(data()), nelement(), 0, std::plus<int32_t>());
-            break;
-        case DType::Int64:
-            *static_cast<int64_t*>(result.data()) = reduce<int64_t>(static_cast<const int64_t*>(data()), nelement(), 0, std::plus<int64_t>());
-            break;
-        default:
-            throw std::runtime_error("Unsupported dtype for sum");
+axe::Tensor axe::Tensor::sum(const std::optional<std::vector<int>>& axis, bool keepdims) const {
+    if (!axis.has_value() || axis->empty()) { // Full reduction
+        Tensor result_scalar({}, dtype_, device_);
+        switch (dtype_) {
+            case DType::Float16: *static_cast<Eigen::half*>(result_scalar.data()) = reduce<Eigen::half>(static_cast<const Eigen::half*>(data()), nelement(), static_cast<Eigen::half>(0.0f), std::plus<Eigen::half>()); break;
+            case DType::Float32: *static_cast<float*>(result_scalar.data()) = reduce<float>(static_cast<const float*>(data()), nelement(), 0.0f, std::plus<float>()); break;
+            case DType::Float64: *static_cast<double*>(result_scalar.data()) = reduce<double>(static_cast<const double*>(data()), nelement(), 0.0, std::plus<double>()); break;
+            case DType::Int32: *static_cast<int32_t*>(result_scalar.data()) = reduce<int32_t>(static_cast<const int32_t*>(data()), nelement(), 0, std::plus<int32_t>()); break;
+            case DType::Int64: *static_cast<int64_t*>(result_scalar.data()) = reduce<int64_t>(static_cast<const int64_t*>(data()), nelement(), 0, std::plus<int64_t>()); break;
+            default: throw std::runtime_error("Unsupported dtype for sum");
+        }
+
+        if (keepdims) {
+            std::vector<size_t> new_shape(shape_.size(), 1);
+            Tensor result(new_shape, dtype_, device_);
+            switch (dtype_) {
+                 case DType::Float16: std::fill(static_cast<Eigen::half*>(result.data()), static_cast<Eigen::half*>(result.data()) + result.nelement(), *static_cast<Eigen::half*>(result_scalar.data())); break;
+                 case DType::Float32: std::fill(static_cast<float*>(result.data()), static_cast<float*>(result.data()) + result.nelement(), *static_cast<float*>(result_scalar.data())); break;
+                 case DType::Float64: std::fill(static_cast<double*>(result.data()), static_cast<double*>(result.data()) + result.nelement(), *static_cast<double*>(result_scalar.data())); break;
+                 case DType::Int32: std::fill(static_cast<int32_t*>(result.data()), static_cast<int32_t*>(result.data()) + result.nelement(), *static_cast<int32_t*>(result_scalar.data())); break;
+                 case DType::Int64: std::fill(static_cast<int64_t*>(result.data()), static_cast<int64_t*>(result.data()) + result.nelement(), *static_cast<int64_t*>(result_scalar.data())); break;
+            }
+            return result;
+        }
+        return result_scalar;
     }
+
+    // Axis-wise reduction
+    std::vector<int> axes = *axis;
+    int rank = shape_.size();
+    for(int& a : axes) {
+        if (a < 0) a += rank;
+        if (a < 0 || a >= rank) throw AxeException("sum(): axis is out of bounds");
+    }
+    std::sort(axes.begin(), axes.end());
+    axes.erase(std::unique(axes.begin(), axes.end()), axes.end());
+
+    std::vector<size_t> out_shape;
+    std::vector<bool> reduce_dims(rank, false);
+    for (int a : axes) reduce_dims[a] = true;
+
+    for (int i = 0; i < rank; ++i) {
+        if (!reduce_dims[i]) {
+            out_shape.push_back(shape_[i]);
+        } else if (keepdims) {
+            out_shape.push_back(1);
+        }
+    }
+
+    if (out_shape.empty() && !keepdims) {
+        return this->sum(std::nullopt, false);
+    }
+
+    Tensor result = Tensor::zeros(out_shape, dtype_, device_);
+    if (result.nelement() == 0) return result; // Empty output
+    std::vector<size_t> out_strides = calculate_strides(result.shape());
+
+    auto reduction_impl = [&](auto* in_data, auto* out_data) {
+        std::vector<size_t> in_idx(rank, 0);
+        for (size_t i = 0; i < nelement(); ++i) {
+            size_t out_offset = 0;
+            size_t out_dim_idx = 0;
+            for (size_t d = 0; d < rank; ++d) {
+                if (!reduce_dims[d]) {
+                    out_offset += in_idx[d] * out_strides[out_dim_idx++];
+                } else if (keepdims) {
+                    out_dim_idx++;
+                }
+            }
+            out_data[out_offset] += in_data[i];
+
+            for (int d = rank - 1; d >= 0; --d) {
+                if (++in_idx[d] < shape_[d]) break;
+                in_idx[d] = 0;
+            }
+        }
+    };
+
+    switch (dtype_) {
+        case DType::Float16: reduction_impl(static_cast<const Eigen::half*>(data()), static_cast<Eigen::half*>(result.data())); break;
+        case DType::Float32: reduction_impl(static_cast<const float*>(data()), static_cast<float*>(result.data())); break;
+        case DType::Float64: reduction_impl(static_cast<const double*>(data()), static_cast<double*>(result.data())); break;
+        case DType::Int32: reduction_impl(static_cast<const int32_t*>(data()), static_cast<int32_t*>(result.data())); break;
+        case DType::Int64: reduction_impl(static_cast<const int64_t*>(data()), static_cast<int64_t*>(result.data())); break;
+        default: throw std::runtime_error("Unsupported dtype for sum");
+    }
+
     return result;
 }
 
@@ -559,60 +819,79 @@ axe::Tensor axe::Tensor::reshape(const std::vector<size_t>& new_shape) const {
     return result;
 }
 
-axe::Tensor axe::Tensor::mean() const {
+axe::Tensor axe::Tensor::mean(const std::optional<std::vector<int>>& axis, bool keepdims) const {
     size_t n = nelement();
     if (n == 0) {
         throw std::runtime_error("Cannot compute mean of an empty tensor");
     }
-    Tensor sum_tensor = sum();
-    Tensor result({}, dtype_, device_);
-    switch (dtype_) {
-        case DType::Float32:
-            *static_cast<float*>(result.data()) = *static_cast<float*>(sum_tensor.data()) / static_cast<float>(n);
-            break;
-        case DType::Float64:
-            *static_cast<double*>(result.data()) = *static_cast<double*>(sum_tensor.data()) / static_cast<double>(n);
-            break;
-        case DType::Int32:
-             *static_cast<int32_t*>(result.data()) = *static_cast<int32_t*>(sum_tensor.data()) / n;
-             break;
-        case DType::Int64:
-             *static_cast<int64_t*>(result.data()) = *static_cast<int64_t*>(sum_tensor.data()) / n;
-             break;
-        default:
-            throw std::runtime_error("Unsupported dtype for mean");
+
+    size_t reduction_nelements = n;
+    if (axis.has_value() && !axis->empty()) {
+        reduction_nelements = 1;
+        int rank = shape_.size();
+        for (int ax : *axis) {
+            int a_ax = ax < 0 ? ax + rank : ax;
+            reduction_nelements *= shape_[a_ax];
+        }
     }
-    return result;
+
+    Tensor sum_tensor = this->sum(axis, keepdims);
+
+    // Create a scalar tensor for the divisor
+    Tensor divisor_tensor({1}, dtype_, device_);
+    switch(dtype_) {
+        case DType::Float16: *static_cast<Eigen::half*>(divisor_tensor.data()) = static_cast<Eigen::half>(reduction_nelements); break;
+        case DType::Float32: *static_cast<float*>(divisor_tensor.data()) = static_cast<float>(reduction_nelements); break;
+        case DType::Float64: *static_cast<double*>(divisor_tensor.data()) = static_cast<double>(reduction_nelements); break;
+        case DType::Int32: *static_cast<int32_t*>(divisor_tensor.data()) = static_cast<int32_t>(reduction_nelements); break;
+        case DType::Int64: *static_cast<int64_t*>(divisor_tensor.data()) = static_cast<int64_t>(reduction_nelements); break;
+        default: throw std::runtime_error("Unsupported dtype for mean division");
+    }
+
+    return sum_tensor.div(divisor_tensor);
 }
 
-axe::Tensor axe::Tensor::max() const {
+axe::Tensor axe::Tensor::var(const std::optional<std::vector<int>>& axis, bool keepdims) const {
+    Tensor mean_val = this->mean(axis, true); // keepdims=true for broadcasting
+    Tensor diff = this->sub(mean_val);
+    Tensor sq_diff = diff.mul(diff);
+    return sq_diff.mean(axis, keepdims);
+}
+
+axe::Tensor axe::Tensor::max(const std::optional<std::vector<int>>& axis, bool keepdims) const {
     if (nelement() == 0) {
         throw std::runtime_error("Cannot compute max of an empty tensor");
     }
-    Tensor result({}, dtype_, device_);
-    switch (dtype_) {
-        case DType::Float32: {
-            const float* data_ptr = static_cast<const float*>(data());
-            *static_cast<float*>(result.data()) = reduce<float>(data_ptr + 1, nelement() - 1, data_ptr[0], [](float a, float b){ return std::max(a, b); });
-            break;
+
+    if (!axis.has_value() || axis->empty()) { // Full reduction
+        Tensor result_scalar({}, dtype_, device_);
+        switch (dtype_) {
+            case DType::Float16: {
+                const Eigen::half* data_ptr = static_cast<const Eigen::half*>(data());
+                *static_cast<Eigen::half*>(result_scalar.data()) = reduce<Eigen::half>(data_ptr + 1, nelement() - 1, data_ptr[0], [](Eigen::half a, Eigen::half b){ return std::max(a, b); });
+                break;
+            }
+            case DType::Float32: {
+                const float* data_ptr = static_cast<const float*>(data());
+                *static_cast<float*>(result_scalar.data()) = reduce<float>(data_ptr + 1, nelement() - 1, data_ptr[0], [](float a, float b){ return std::max(a, b); });
+                break;
+            }
+            case DType::Int32: {
+                const int32_t* data_ptr = static_cast<const int32_t*>(data());
+                *static_cast<int32_t*>(result_scalar.data()) = reduce<int32_t>(data_ptr + 1, nelement() - 1, data_ptr[0], [](int32_t a, int32_t b){ return std::max(a, b); });
+                break;
+            }
+            case DType::Int64: {
+                const int64_t* data_ptr = static_cast<const int64_t*>(data());
+                *static_cast<int64_t*>(result_scalar.data()) = reduce<int64_t>(data_ptr + 1, nelement() - 1, data_ptr[0], [](int64_t a, int64_t b){ return std::max(a, b); });
+                break;
+            }
+            default:
+                throw std::runtime_error("Unsupported dtype for max");
         }
-        case DType::Float64: {
-            const double* data_ptr = static_cast<const double*>(data());
-            *static_cast<double*>(result.data()) = reduce<double>(data_ptr + 1, nelement() - 1, data_ptr[0], [](double a, double b){ return std::max(a, b); });
-            break;
-        }
-        case DType::Int32: {
-            const int32_t* data_ptr = static_cast<const int32_t*>(data());
-            *static_cast<int32_t*>(result.data()) = reduce<int32_t>(data_ptr + 1, nelement() - 1, data_ptr[0], [](int32_t a, int32_t b){ return std::max(a, b); });
-            break;
-        }
-        case DType::Int64: {
-            const int64_t* data_ptr = static_cast<const int64_t*>(data());
-            *static_cast<int64_t*>(result.data()) = reduce<int64_t>(data_ptr + 1, nelement() - 1, data_ptr[0], [](int64_t a, int64_t b){ return std::max(a, b); });
-            break;
-        }
-        default:
-            throw std::runtime_error("Unsupported dtype for max");
+        return result_scalar;
     }
-    return result;
+
+    // Axis-wise reduction is not implemented yet for max
+    throw std::runtime_error("Axis-wise max is not yet implemented.");
 }

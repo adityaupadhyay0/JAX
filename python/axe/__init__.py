@@ -3,7 +3,7 @@ import contextlib
 import functools
 import inspect
 from _axe import Tensor, Device, DType, Variable, AxeError, OOMError, memory
-from _axe import _add, _sub, _mul, _matmul, _sum, _stack
+from _axe import _add, _sub, _mul, _matmul, _sum, _mean, _stack, _conv2d, _sqrt, _cast, _exp
 from _axe import _value_and_grad_cpp_multi
 from _axe import set_grad_enabled, is_grad_enabled
 from _axe import jit as _jit
@@ -26,6 +26,11 @@ def _to_numpy_dtype_str(dtype):
     if isinstance(dtype, DType):
         return dtype.name.lower()
     raise TypeError(f"Unsupported dtype type for numpy conversion: {type(dtype)}")
+
+def _normalize_shape(shape):
+    if isinstance(shape, int):
+        return [shape]
+    return list(shape)
 
 # --- Save Original C++ Methods ---
 _original_tensor_add = Tensor.__add__
@@ -66,11 +71,30 @@ def _clear_grads(*args):
         if isinstance(arg, Variable):
             arg.grad = None
 
+def _promote_operands(a, b):
+    """Promotes operands for element-wise operations."""
+    if a.data.dtype != b.data.dtype and 'float' in str(a.data.dtype).lower() and 'float' in str(b.data.dtype).lower():
+        if a.data.dtype == DType.Float16:
+            return cast(a, 'float32'), b
+        if b.data.dtype == DType.Float16:
+            return a, cast(b, 'float32')
+    return a, b
+
 # --- Python Operator Functions ---
 
 def add(a, b):
     va = _ensure_variable(a)
     vb = _ensure_variable(b)
+    if 'amp' in globals() and amp.autocast.is_enabled():
+        autocast_dtype_str = amp.autocast.get_autocast_dtype()
+        autocast_dtype = _to_dtype_enum(autocast_dtype_str)
+        if 'float' in str(va.data.dtype).lower() and va.data.dtype != autocast_dtype:
+             va = cast(va, autocast_dtype_str)
+        if 'float' in str(vb.data.dtype).lower() and vb.data.dtype != autocast_dtype:
+             vb = cast(vb, autocast_dtype_str)
+    else:
+        va, vb = _promote_operands(va, vb)
+
     if not _should_build_graph(va, vb):
         return Variable(_original_tensor_add(va.data, vb.data))
     file, line = _get_caller_location()
@@ -79,6 +103,16 @@ def add(a, b):
 def sub(a, b):
     va = _ensure_variable(a)
     vb = _ensure_variable(b)
+    if 'amp' in globals() and amp.autocast.is_enabled():
+        autocast_dtype_str = amp.autocast.get_autocast_dtype()
+        autocast_dtype = _to_dtype_enum(autocast_dtype_str)
+        if 'float' in str(va.data.dtype).lower() and va.data.dtype != autocast_dtype:
+             va = cast(va, autocast_dtype_str)
+        if 'float' in str(vb.data.dtype).lower() and vb.data.dtype != autocast_dtype:
+             vb = cast(vb, autocast_dtype_str)
+    else:
+        va, vb = _promote_operands(va, vb)
+
     if not _should_build_graph(va, vb):
         return Variable(_original_tensor_sub(va.data, vb.data))
     file, line = _get_caller_location()
@@ -87,6 +121,16 @@ def sub(a, b):
 def mul(a, b):
     va = _ensure_variable(a)
     vb = _ensure_variable(b)
+    if 'amp' in globals() and amp.autocast.is_enabled():
+        autocast_dtype_str = amp.autocast.get_autocast_dtype()
+        autocast_dtype = _to_dtype_enum(autocast_dtype_str)
+        if 'float' in str(va.data.dtype).lower() and va.data.dtype != autocast_dtype:
+             va = cast(va, autocast_dtype_str)
+        if 'float' in str(vb.data.dtype).lower() and vb.data.dtype != autocast_dtype:
+             vb = cast(vb, autocast_dtype_str)
+    else:
+        va, vb = _promote_operands(va, vb)
+
     if not _should_build_graph(va, vb):
         return Variable(_original_tensor_mul(va.data, vb.data))
     file, line = _get_caller_location()
@@ -95,10 +139,49 @@ def mul(a, b):
 def matmul(a, b):
     va = _ensure_variable(a)
     vb = _ensure_variable(b)
+
+    # Autocast logic for matmul
+    if 'amp' in globals() and amp.autocast.is_enabled():
+        autocast_dtype_str = amp.autocast.get_autocast_dtype()
+        autocast_dtype = _to_dtype_enum(autocast_dtype_str)
+
+        # Only cast for float tensors
+        if 'float' in str(va.data.dtype).lower() and va.data.dtype != autocast_dtype:
+             va = cast(va, autocast_dtype_str)
+        if 'float' in str(vb.data.dtype).lower() and vb.data.dtype != autocast_dtype:
+             vb = cast(vb, autocast_dtype_str)
+
     if not _should_build_graph(va, vb):
         return Variable(_original_tensor_matmul(va.data, vb.data))
     file, line = _get_caller_location()
     return _matmul(va, vb, file, line)
+
+def conv2d(x, weight, bias, stride, padding):
+    vx = _ensure_variable(x)
+    v_weight = _ensure_variable(weight)
+    v_bias = _ensure_variable(bias) if bias is not None else None
+
+    # Autocast logic for conv2d
+    if 'amp' in globals() and amp.autocast.is_enabled():
+        autocast_dtype_str = amp.autocast.get_autocast_dtype()
+        autocast_dtype = _to_dtype_enum(autocast_dtype_str)
+
+        if 'float' in str(vx.data.dtype).lower() and vx.data.dtype != autocast_dtype:
+            vx = cast(vx, autocast_dtype_str)
+        if 'float' in str(v_weight.data.dtype).lower() and v_weight.data.dtype != autocast_dtype:
+            v_weight = cast(v_weight, autocast_dtype_str)
+        # Bias is usually kept in float32
+
+    graph_inputs = [vx, v_weight]
+    if v_bias:
+        graph_inputs.append(v_bias)
+
+    if not _should_build_graph(*graph_inputs):
+        bias_tensor = v_bias.data if v_bias is not None else None
+        return Variable(vx.data.conv2d(v_weight.data, bias_tensor, stride, padding))
+
+    file, line = _get_caller_location()
+    return _conv2d(vx, v_weight, v_bias, stride, padding, file, line)
 
 def truediv(a, b):
     # div does not support gradients, so we don't build a graph.
@@ -106,14 +189,43 @@ def truediv(a, b):
     vb = _ensure_variable(b)
     return Variable(_original_tensor_truediv(va.data, vb.data))
 
-def sum_op(x, axis=None, keepdims=False):
-    if axis is not None or keepdims:
-        raise NotImplementedError("sum with axis/keepdims is not yet supported.")
+def sqrt(x):
     vx = _ensure_variable(x)
     if not _should_build_graph(vx):
-        return Variable(_original_tensor_sum(vx.data))
+        return Variable(vx.data.sqrt())
     file, line = _get_caller_location()
-    return _sum(vx, file, line)
+    return _sqrt(vx, file, line)
+
+def cast(x, new_dtype):
+    vx = _ensure_variable(x)
+    dt_enum = _to_dtype_enum(new_dtype)
+    if not _should_build_graph(vx):
+        return Variable(vx.data.cast(dt_enum))
+    file, line = _get_caller_location()
+    return _cast(vx, dt_enum, file, line)
+
+def exp(x):
+    vx = _ensure_variable(x)
+    if not _should_build_graph(vx):
+        return Variable(vx.data.exp())
+    file, line = _get_caller_location()
+    return _exp(vx, file, line)
+
+def sum_op(x, axis=None, keepdims=False):
+    vx = _ensure_variable(x)
+
+    axis_arg = None
+    if axis is not None:
+        if isinstance(axis, int):
+            axis_arg = [axis]
+        else:
+            axis_arg = list(axis)
+
+    if not _should_build_graph(vx):
+        return Variable(vx.data.sum(axis=axis_arg, keepdims=keepdims))
+
+    file, line = _get_caller_location()
+    return _sum(vx, axis=axis_arg, keepdims=keepdims, file=file, line=line)
 
 # --- Monkey-patching operators ---
 # We only patch Variable, since Tensor ops should not build graphs.
@@ -127,6 +239,8 @@ Variable.__rsub__ = lambda b, a: sub(a, b)
 Variable.__rmul__ = lambda b, a: mul(a, b)
 Variable.__rmatmul__ = lambda b, a: matmul(a, b)
 Variable.sum = sum_op
+Variable.cast = cast
+Variable.__pow__ = lambda a, b: mul(a, a) if b == 2 else NotImplemented
 
 
 # --- JIT Compilation ---
@@ -274,11 +388,13 @@ def array(obj, dtype=None, device='cpu', requires_grad=False):
         return Variable(t, requires_grad=False)
 
 def zeros(shape, dtype='float32', device='cpu', requires_grad=False):
+    shape = _normalize_shape(shape)
     dt_enum = _to_dtype_enum(dtype)
     t = Tensor.zeros(shape, dt_enum, Device.CPU if device == 'cpu' else Device.GPU)
     return Variable(t, requires_grad=True) if requires_grad else Variable(t)
 
 def ones(shape, dtype='float32', device='cpu', requires_grad=False):
+    shape = _normalize_shape(shape)
     dt_enum = _to_dtype_enum(dtype)
     t = Tensor.ones(shape, dt_enum, Device.CPU if device == 'cpu' else Device.GPU)
     return Variable(t, requires_grad=True) if requires_grad else Variable(t)
@@ -287,6 +403,14 @@ def arange(start, end, dtype='float32', device='cpu', requires_grad=False):
     dt_enum = _to_dtype_enum(dtype)
     t = Tensor.arange(start, end, dt_enum, Device.CPU if device == 'cpu' else Device.GPU)
     return Variable(t, requires_grad=True) if requires_grad else Variable(t)
+
+def randn(*shape, dtype='float32', device='cpu', requires_grad=False):
+    np_arr = np.random.randn(*shape).astype(_to_numpy_dtype_str(dtype))
+    return array(np_arr, dtype=dtype, device=device, requires_grad=requires_grad)
+
+def rand(*shape, dtype='float32', device='cpu', requires_grad=False):
+    np_arr = np.random.rand(*shape).astype(_to_numpy_dtype_str(dtype))
+    return array(np_arr, dtype=dtype, device=device, requires_grad=requires_grad)
 
 def stack(tensors, dim=0):
     """
@@ -308,16 +432,35 @@ def stack(tensors, dim=0):
 
     return _stack(variables, dim)
 
-def mean(x):
-    data = x.data if isinstance(x, Variable) else x
-    return data.mean()
+def mean_op(x, axis=None, keepdims=False):
+    vx = _ensure_variable(x)
+
+    axis_arg = None
+    if axis is not None:
+        if isinstance(axis, int):
+            axis_arg = [axis]
+        else:
+            axis_arg = list(axis)
+
+    if not _should_build_graph(vx):
+        return Variable(vx.data.mean(axis=axis_arg, keepdims=keepdims))
+
+    file, line = _get_caller_location()
+    return _mean(vx, axis=axis_arg, keepdims=keepdims, file=file, line=line)
 
 def max(x):
     data = x.data if isinstance(x, Variable) else x
     return data.max()
 
+def var(x, axis=None, keepdims=False):
+    mean_x = mean(x, axis=axis, keepdims=True)
+    diff = sub(x, mean_x)
+    sq_diff = mul(diff, diff)
+    return mean(sq_diff, axis=axis, keepdims=keepdims)
+
 # Overwrite the global sum with our new implementation
 sum = sum_op
+mean = mean_op
 
 # --- Gradient Checkpointing ---
 
@@ -326,3 +469,8 @@ def checkpoint(fn):
     def checkpointed_fn(*args):
         return _checkpoint(fn, list(args))
     return checkpointed_fn
+
+# Expose submodules
+from . import nn
+from . import optim
+from . import amp
